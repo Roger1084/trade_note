@@ -1,6 +1,6 @@
 ---
 name: superme
-description: 开启最高权限模式——自主执行任务，不再逐步请示，直到任务完成后通知用户。
+description: Enable autonomous mode - execute tasks without step-by-step approval
 ---
 
 # 超级模式 (Superme Mode)

@@ -1,5 +1,5 @@
-{--- 2026选股器：近3天出现进信号 ---}
-{来源：2026择时器-爆信号优化版，进信号逻辑保持一致，叠加基础市值与风险基因限制}
+{--- 2026选股器：近3天内有进信号，或当天有爆信号；且当天收盘不低于250日均线 ---}
+{来源：2026择时器-爆信号优化版，进/爆信号逻辑保持一致，叠加基础市值与风险基因限制}
 
 {--- 开关设置：0=关闭，1=启用 ---}
 USE_MKT:=0;       {大盘指数过滤}
@@ -154,10 +154,14 @@ FLOAT_MKT_CAP:=FINANCE(40)/100000000;
 MKT_CAP_OK:=FLOAT_MKT_CAP>20 AND FLOAT_MKT_CAP<1000;
 BASE_MKT_OK:=NON_ST AND NON_NEW AND MAIN_BOARD AND MKT_CAP_OK;
 
+{--- 250日均线：当天收盘价不能低于MA250（在均线之上或等于） ---}
+MA250:=MA(C,250);
+MA250_OK:=C>=MA250;
+
 {--- 评分输出框架：只保留必要硬过滤，其余质量维度全部加减分 ---}
-{硬过滤只包含：非ST、非新股、主板、流通市值合理、近3天出现ENTER_SIG。}
-BASE_ENTER:=COUNT(ENTER_SIG,3)>=1;
-BASE_HARD_OK:=BASE_ENTER AND BASE_MKT_OK;
+{硬过滤：非ST、非新股、主板、流通市值合理；且(近3天出现进信号 或 当天出现爆信号)；且收盘在250日均线之上。}
+SIGNAL_OK:=COUNT(ENTER_SIG,3)>=1 OR BURST_SIG;
+BASE_HARD_OK:=SIGNAL_OK AND BASE_MKT_OK AND MA250_OK;
 BASE_SIG_SCORE:=IF(BASE_HARD_OK,1,0);
 
 {--- 推荐阈值参数 ---}

@@ -1,6 +1,6 @@
 ---
 name: csuperme
-description: 关闭最高权限模式——恢复正常模式，每步操作需要用户确认。
+description: Disable autonomous mode - return to normal interaction
 ---
 
 # 关闭超级模式 (Cancel Superme Mode)

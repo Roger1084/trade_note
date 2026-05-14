@@ -1,10 +1,11 @@
-{--- 2026择时器：EMA+量能+MACD+ATR 爆点版 ---}
+{--- 2026择时器：EMA+量能+MACD+ATR 爆点版（主图板块信息：行业/概念文本、行业指数涨跌与相对强弱；已取消概念指数跨品种展示） ---}
 {设计目标：爆=趋势启动预警，进=爆后1到4天确认；爆点只做趋势向上的中短线择时}
 
 {--- 开关设置：0=关闭，1=启用 ---}
 USE_MKT:=0;       {大盘指数过滤}
 USE_WEEK:=1;      {周线趋势过滤：只做周线趋势向上的个股}
 USE_STRICT:=0;    {严格模式：打开后更偏突破确认，信号更少}
+USE_CAUTIOUS_STOP:=1; {1=更谨慎止损：白虚线抬高，更早防守；0=沿用原 ATR 倍数与风险下限}
 {说明：市场状态和板块强度已放到选股公式，本公式主要负责个股择时；因此 USE_MKT 默认关闭。}
 {说明：USE_WEEK 默认打开，是为了避免日线小反弹误判为趋势启动，只在周线背景不差时寻找爆点。}
 
@@ -14,6 +15,8 @@ MA13:EMA(C,13),COLORRED,LINETHICK2;
 MA34:EMA(C,34),COLORGREEN,LINETHICK1;
 MA55:=EMA(C,55);
 MA89:=EMA(C,89);
+{--- 250 日简单均线（年线参考），仅展示 ---}
+MA250:MA(C,250),COLORGRAY,LINETHICK1;
 
 {--- 量能系统 ---}
 VMA5:=MA(V,5);
@@ -45,14 +48,19 @@ TRUE_RANGE_VAL:=MAX(MAX(H-L,ABS(H-REF(C,1))),ABS(L-REF(C,1)));
 ATR14:=MA(TRUE_RANGE_VAL,14);
 ATR_MA20:=MA(ATR14,20);
 ATR_PCT:=ATR14/C;
-ATR_STOP:=MAX(MA13-ATR14*1.2,MA34-ATR14*0.6);
+{止损线：K 越小则从均线下扣得越少，线越高，越谨慎（离现价更近）；原默认 1.2 / 0.6}
+ATR_STOP_K13:=IF(USE_CAUTIOUS_STOP=1,1.0,1.2);
+ATR_STOP_K34:=IF(USE_CAUTIOUS_STOP=1,0.48,0.6);
+ATR_STOP:=MAX(MA13-ATR14*ATR_STOP_K13,MA34-ATR14*ATR_STOP_K34);
 ATR_RISK:=(C-ATR_STOP)/C;
 ATR_VOL_OK:=ATR14>=ATR_MA20*0.75 AND ATR14<=ATR_MA20*2.2 AND ATR_PCT>=0.012 AND ATR_PCT<=0.085;
-ATR_RISK_OK:=ATR_RISK>=0.015 AND ATR_RISK<=0.095 AND C<=MA13+ATR14*3.2;
+{更紧止损时现价到线的距离略小，风险下限略降，避免爆点条件与画线逻辑打架}
+ATR_RISK_MIN:=IF(USE_CAUTIOUS_STOP=1,0.012,0.015);
+ATR_RISK_OK:=ATR_RISK>=ATR_RISK_MIN AND ATR_RISK<=0.095 AND C<=MA13+ATR14*3.2;
 ATR_OK:=ATR_VOL_OK AND ATR_RISK_OK;
 {说明：ATR（平均真实波幅）用于衡量个股自身波动，而不是用固定百分比一刀切。}
 {ATR_VOL_OK 过滤两类低质量机会：波动过小的僵尸股，以及短期波动过热的情绪股。}
-{ATR_STOP 使用 MA13 和 MA34 结合 ATR 生成动态风控线，适配不同波动率的股票。}
+{ATR_STOP 使用 MA13 和 MA34 结合 ATR 生成动态风控线，适配不同波动率的股票；USE_CAUTIOUS_STOP=1 时倍数更紧。}
 {ATR_RISK 表示现价到风控线的距离；太近容易被正常波动洗出，太远则追涨风险过高。}
 {ATR_RISK_OK 的意义是：爆点出现时必须离止损位合理，做到有启动弹性也有风控边界。}
 
@@ -200,6 +208,23 @@ ENTER_SIG:=FILTER(ENTER_RAW,4);
 {说明：进信号最终目标是确认爆后仍有主升能力，而不是寻找最漂亮的 K 线。}
 {只要趋势仍在、资金未明显离场、关键线未破，就允许标记进。}
 
+{--- 板块概念对照：仅展示，不参与爆/进/卖/减；行业指数用 HY_INDEXC；概念栏为 GNBLOCK 文本（已取消概念指数涨跌与 GN 跨品种链） ---}
+HY_CHG_PCT:=(HY_INDEXC/REF(HY_INDEXC,1)-1)*100;
+HY_CHG3_PCT:=(HY_INDEXC/REF(HY_INDEXC,3)-1)*100;
+MKT_DAY_PCT:=(INDEXC/REF(INDEXC,1)-1)*100;
+MKT_CHG3_PCT:=(INDEXC/REF(INDEXC,3)-1)*100;
+STK_CHG3_PCT:=(C/REF(C,3)-1)*100;
+REL_VS_HY:=PCT_CHG-HY_CHG_PCT;
+REL_VS_MKT:=PCT_CHG-MKT_DAY_PCT;
+REL3_VS_HY:=STK_CHG3_PCT-HY_CHG3_PCT;
+REL3_VS_MKT:=STK_CHG3_PCT-MKT_CHG3_PCT;
+DRAWTEXT_FIX(ISLASTBAR,0,0.02,0,STRCAT('行业 ',HYBLOCK)),COLORYELLOW;
+DRAWTEXT_FIX(ISLASTBAR,0,0.07,0,STRCAT('概念 ',GNBLOCK)),COLORGREEN;
+DRAWTEXT_FIX(ISLASTBAR,0,0.12,0,STRCAT('行业指数今日涨跌% : ',VAR2STR(HY_CHG_PCT,2))),COLORRED;
+DRAWTEXT_FIX(ISLASTBAR,0,0.17,0,STRCAT('行业指数三日涨跌% : ',VAR2STR(HY_CHG3_PCT,2))),COLORRED;
+DRAWTEXT_FIX(ISLASTBAR,0,0.22,0,STRCAT(STRCAT(STRCAT(STRCAT(STRCAT('当日涨幅% 本股 ',VAR2STR(PCT_CHG,2)),'  行业指数 '),VAR2STR(HY_CHG_PCT,2)),'  大盘 '),VAR2STR(MKT_DAY_PCT,2))),COLORWHITE;
+DRAWTEXT_FIX(ISLASTBAR,0,0.27,0,STRCAT(STRCAT(STRCAT('强弱(超额%) 对行业 ',VAR2STR(REL_VS_HY,2)),'  对大盘 '),VAR2STR(REL_VS_MKT,2))),COLOR00FFFF;
+DRAWTEXT_FIX(ISLASTBAR,0,0.32,0,STRCAT(STRCAT(STRCAT('三日强弱(超额%) 对行业 ',VAR2STR(REL3_VS_HY,2)),'  对大盘 '),VAR2STR(REL3_VS_MKT,2))),COLOR00FFFF;
 {--- 评分展示系统：完整迁移选股器评分逻辑，只做展示，不影响爆信号和进信号 ---}
 {硬过滤参考：非ST、非新股、主板、流通市值合理、近3天出现ENTER_SIG。}
 NON_ST:=NOT(NAMELIKE('ST')) AND NOT(NAMELIKE('*ST'));
@@ -395,9 +420,10 @@ DRAWNUMBER(BURST_SIG OR ENTER_SIG,HIGH*1.1,TOTAL_SCORE),COLORWHITE;
 
 {--- 辅助画线 ---}
 STOP_LINE:ATR_STOP,DOTLINE,COLORWHITE;
-{说明：风控线改为 ATR_STOP，意义是让止损位置随个股波动率变化。}
-{波动大的股票风控线会适当放宽，波动小的股票风控线会更贴近趋势线，比固定 3% 或 5% 更实用。}
+{说明：风控线为 ATR_STOP，随波动率变化；USE_CAUTIOUS_STOP=1 时线更贴近均线、更谨慎。}
 
 {涨跌停K线染色}
 STICKLINE(CLOSE/REF(C,1)>=1.095,O,C,2,0),COLORYELLOW;
 STICKLINE(CLOSE/REF(C,1)<=0.905,O,C,2,0),COLORGREEN;
+
+{==================== 若需恢复「概念指数涨跌」与 GN 枚举链，可使用同目录 _GEN_GN_CHAIN.PY 历史版本或自行从备份合并 ====================};
