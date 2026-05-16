@@ -1,0 +1,391 @@
+{═══════════════════════════════════════════════════════════════}
+{  2026选股器：板块共振优化版                                  }
+{  功能：条件选股公式，在全市场筛选符合介入条件的个股           }
+{  信号来源：与2026择时器-评分制优化版.txt完全同步              }
+{  输出：近3天有介入信号 + 板块共振 + 评分达标的个股            }
+{═══════════════════════════════════════════════════════════════}
+{
+  【选股逻辑】
+  第一步：计算与择时器完全一致的介入信号（ENTER_SIG）
+  第二步：硬过滤——基础条件（非ST/新股/主板/市值）+ 年线 + 板块共振
+  第三步：信号检测——近3天出现过ENTER_SIG
+  第四步：综合评分——选股器独立评分系统（趋势+RS+量价+筹码+持续性+主升-风险）
+  第五步：输出——硬过滤通过 + 评分≥60
+
+  【与择时器的关系】
+  - 信号逻辑100%同步择时器的ENTER_SIG（三路合并）
+  - 评分系统独立但类似（选股器用于排序，择时器用于触发）
+  - 板块共振在选股器中既是硬过滤也是评分维度
+}
+
+{───────────────────────────────────────────────────────────────}
+{  开关设置：0=关闭，1=启用                                    }
+{───────────────────────────────────────────────────────────────}
+USE_MKT:=0;       {是否启用大盘指数过滤}
+USE_WEEK:=1;      {是否启用周线趋势过滤（默认开启）}
+USE_STRICT:=0;    {是否启用严格模式（信号更少）}
+CAUTIOUS_STOP:=1; {是否启用谨慎止损模式}
+USE_MA250:=1;     {是否启用250日均线过滤}
+USE_HY:=1;        {是否启用板块共振过滤（默认开启）}
+
+{───────────────────────────────────────────────────────────────}
+{  基础趋势线（选股器用:=赋值，不输出画线）                     }
+{───────────────────────────────────────────────────────────────}
+MA5:=EMA(C,5);       {5日指数均线：短期趋势}
+MA13:=EMA(C,13);     {13日指数均线：中期生命线}
+MA34:=EMA(C,34);     {34日指数均线：中期趋势基准}
+MA55:=EMA(C,55);     {55日指数均线：中长期趋势}
+MA89:=EMA(C,89);     {89日指数均线：长期趋势}
+MA250:=MA(C,250);    {250日简单均线：年线牛熊分界}
+
+{───────────────────────────────────────────────────────────────}
+{  量能基础系统                                                 }
+{───────────────────────────────────────────────────────────────}
+VMA5:=MA(V,5);       {5日均量}
+VMA20:=MA(V,20);     {20日均量}
+VOL_UP:=V>=VMA5*1.12 AND V>=REF(V,1)*1.02;  {温和放量}
+VOL_BIG:=V>=VMA5*1.45 AND V>=VMA20*1.2 AND V>=REF(V,1)*1.12; {强放量}
+
+{───────────────────────────────────────────────────────────────}
+{  堆量过程指标（评估近5~7天量能趋势而非单日快照）              }
+{───────────────────────────────────────────────────────────────}
+VOL_STACK_DAYS:=COUNT(VMA5>=VMA20*1.02, 7);    {近7天中5日均量站上20日均量的天数}
+VMA5_SLOPE:=VMA5/REF(VMA5,5);                   {5日均量线斜率：>1扩张 <1萎缩}
+YANG_DAY:=C>=O OR C>=REF(C,1);                  {阳线判定}
+YANG_VOL_SUM:=SUM(IF(YANG_DAY, V, 0), 5);       {近5天阳线成交量之和}
+YANG_DAY_CNT:=SUM(IF(YANG_DAY, 1, 0), 5);       {近5天阳线天数}
+YANG_VOL_AVG:=YANG_VOL_SUM/MAX(YANG_DAY_CNT, 1); {阳线日均量}
+ALL_VOL_AVG:=MA(V, 5);                           {5日均量}
+YANG_VOL_BIAS:=YANG_VOL_AVG/ALL_VOL_AVG;         {阳量偏离度：>1资金偏买 <1资金偏卖}
+PULL_VOL_SHRINK:=COUNT(C<REF(C,1) AND V<REF(V,1)*0.95, 3)>=2 AND C>=MA13*0.995; {缩量回踩确认}
+
+{───────────────────────────────────────────────────────────────}
+{  MACD趋势动能（辅助确认）                                     }
+{───────────────────────────────────────────────────────────────}
+DIF:=EMA(C,12)-EMA(C,26);   {DIF快线}
+DEA:=EMA(DIF,9);             {DEA慢线}
+MACD_HIST:=DIF-DEA;          {MACD柱}
+MACD_UP:=DIF>DEA AND DIF>=REF(DIF,1); {MACD动能向上}
+
+{───────────────────────────────────────────────────────────────}
+{  ATR平均真实波幅（动态止损和波动率计算）                      }
+{───────────────────────────────────────────────────────────────}
+TRUE_RANGE_VAL:=MAX(MAX(H-L,ABS(H-REF(C,1))),ABS(L-REF(C,1))); {真实波幅}
+ATR14:=MA(TRUE_RANGE_VAL,14);      {14日ATR}
+ATR_MA20:=MA(ATR14,20);            {20日ATR均值}
+ATR_PCT:=ATR14/C;                  {ATR占价格比}
+ATR_STOP_K13:=IF(CAUTIOUS_STOP=1,1.0,1.2);  {MA13止损系数}
+ATR_STOP_K34:=IF(CAUTIOUS_STOP=1,0.48,0.6); {MA34止损系数}
+ATR_STOP:=MAX(MA13-ATR14*ATR_STOP_K13,MA34-ATR14*ATR_STOP_K34); {ATR动态止损线}
+ATR_RISK:=(C-ATR_STOP)/C;          {风险距离%}
+
+{───────────────────────────────────────────────────────────────}
+{  大趋势过滤（判断是否处于上升趋势）                           }
+{───────────────────────────────────────────────────────────────}
+BIG_TREND_OK:=C>=MA34*0.995 AND MA34>=MA55*0.99 AND C>=MA55*0.985; {价格在中期均线附近}
+MID_SLOPE_OK:=MA13>=REF(MA13,3)*1.002 OR MA34>=REF(MA34,5)*1.001;   {中期均线斜率向上}
+LONG_SLOPE_OK:=MA55>=REF(MA55,8)*0.998 OR MA34>=MA55;               {长期均线不持续下行}
+TREND_PROGRESS:=HHV(H,30)>=REF(HHV(H,30),10)*1.01 OR MA34>=REF(MA34,10)*1.006 OR C>=HHV(H,60)*0.97; {趋势有推进}
+UP_REGIME:=BIG_TREND_OK AND MID_SLOPE_OK AND LONG_SLOPE_OK AND TREND_PROGRESS; {上升趋势确认}
+
+{───────────────────────────────────────────────────────────────}
+{  周K大趋势（保证日线操作在周线上升背景中）                    }
+{───────────────────────────────────────────────────────────────}
+WC:=C#WEEK;          {周线收盘价}
+WMA5:=MA(C,5)#WEEK;  {周线5均线}
+WMA10:=MA(C,10)#WEEK; {周线10均线}
+WMA20:=MA(C,20)#WEEK; {周线20均线}
+W_UP:=WC>=WMA10*0.98 AND WMA5>=WMA10*0.995 AND WMA10>=WMA20*0.985 AND (WMA5>=REF(WMA5,1)*0.998 OR WC>=HHV(WC,20)*0.90); {周线向上}
+WEEK_FILTER:=IF(USE_WEEK=1, W_UP, 1); {周线过滤开关}
+
+{───────────────────────────────────────────────────────────────}
+{  价格结构：三种核心形态（覆盖上涨全周期）                      }
+{───────────────────────────────────────────────────────────────}
+{形态1：上升初段突破——均线修复后首次突破关键阻力}
+TREND_STACK_OK:=MA5>=MA13*0.995 AND MA13>=MA34*0.995; {均线多头排列基本成立}
+BREAK_POINT:=C>REF(HHV(H,20),1)*0.998 OR C>=HHV(H,30)*0.985; {接近20/30日高点}
+BIG_BREAK:=C>REF(HHV(H,20),1) OR C>=HHV(H,60)*0.985;          {突破20日高或接近60日高}
+EMA_REPAIR:=C>=MA13 AND MA5>=MA13 AND MA13>=REF(MA13,3)*1.001; {均线修复确认}
+START_SETUP:=UP_REGIME AND TREND_STACK_OK AND EMA_REPAIR AND BREAK_POINT AND BIG_BREAK AND C/MA34<=1.16; {突破形态成立}
+
+{形态2：回踩再启动——先回踩MA13~MA34再重新走强}
+PULL_ZONE:=COUNT(L<=MA13*1.025 AND L>=MA34*0.965,8)>=1; {近8天触及过MA13~MA34区间}
+PULL_BREAK:=C>REF(HHV(H,5),1) OR C>=HHV(H,20)*0.965;    {回踩后重新突破}
+PULL_REPAIR:=UP_REGIME AND MA13>=MA34*0.995 AND PULL_ZONE AND PULL_BREAK AND C>=MA5 AND C>REF(C,1) AND C>=HHV(H,20)*0.92 AND C/MA34<=1.18; {回踩再启动成立}
+
+{形态3：趋势推进——已形成上升趋势后继续堆量推高}
+TREND_CONT:=UP_REGIME AND MA5>=MA13 AND MA13>=MA34 AND C>=MA5 AND VMA5>=VMA20 AND VOL_STACK_DAYS>=4 AND C>=HHV(H,20)*0.97 AND C/MA34<=1.25; {趋势推进成立}
+
+{───────────────────────────────────────────────────────────────}
+{  前高阻力与突破确认（条件性过滤器：近阻力需放量突破）         }
+{───────────────────────────────────────────────────────────────}
+PEAK_30:=HHV(H, 30);                    {30日最高点}
+PEAK_60:=HHV(H, 60);                    {60日最高点}
+NEAR_PEAK:=C>=PEAK_30*0.965 OR (C>=PEAK_60*0.97 AND PEAK_60>PEAK_30*1.02); {距前高3.5%内}
+PEAK_VOL_OK:=V>=VMA20*1.25 AND V>=REF(V,1)*1.03;   {突破量能确认}
+PEAK_ACT_OK:=C>=O AND C>=H*0.95;                     {突破主动性确认}
+PEAK_BREAK:=PEAK_VOL_OK AND PEAK_ACT_OK;             {有效突破}
+PEAK_FILTER:=IF(NEAR_PEAK, PEAK_BREAK, 1);           {近阻力→需突破，否则放行}
+
+{───────────────────────────────────────────────────────────────}
+{  K线质量（用于评分计算）                                     }
+{───────────────────────────────────────────────────────────────}
+BODY_RATIO:=ABS(C-O)/(H-L+0.001);   {实体占比}
+UP_SHADOW:=(H-C)/(H-L+0.001);       {上影线占比}
+PCT_CHG:=(C/REF(C,1)-1)*100;        {当日涨跌幅%}
+
+{───────────────────────────────────────────────────────────────}
+{  大盘指数过滤                                                 }
+{───────────────────────────────────────────────────────────────}
+MKT_MA20:=MA(INDEXC,20);            {大盘20日均线}
+MKT_MA60:=MA(INDEXC,60);            {大盘60日均线}
+MKT_OK:=INDEXC>=MKT_MA20*0.985 OR MKT_MA20>=REF(MKT_MA20,1) OR INDEXC>=MKT_MA60; {大盘环境OK}
+MKT_FILTER:=IF(USE_MKT=1, MKT_OK, 1); {大盘过滤开关}
+STRICT_OK:=IF(USE_STRICT=1, VOL_UP AND MACD_UP AND (START_SETUP OR PULL_REPAIR OR TREND_CONT), 1); {严格模式}
+
+{═══════════════════════════════════════════════════════════════}
+{  关卡系统（5关，全部通过才进入评分环节）                     }
+{═══════════════════════════════════════════════════════════════}
+GATE_WEEK:=WEEK_FILTER;                       {G1：周线趋势向上}
+GATE_STRUCT:=START_SETUP OR PULL_REPAIR OR TREND_CONT; {G2：三种价格结构至少匹配一种}
+GATE_VOL:=V>=VMA20*0.85;                      {G3：量能不能死量}
+GATE_POS:=C/MA34<=1.25;                       {G4：不追高（距34日线≤25%）}
+GATE_MA250:=IF(USE_MA250=1, C>=MA250, 1);    {G5：年线上方}
+GATE_ALL:=GATE_WEEK AND GATE_STRUCT AND GATE_VOL AND GATE_POS AND GATE_MA250; {五关全过}
+
+{═══════════════════════════════════════════════════════════════}
+{  综合评分系统（与择时器完全一致，满分108）                     }
+{  维度A~F：个股自身质量（100分） + 维度G：板块共振（8分）      }
+{═══════════════════════════════════════════════════════════════}
+
+{─── 维度A：周线趋势强度（25分） ───}
+W_S1:=IF(WC>=WMA10*1.005, 8, IF(WC>=WMA10*0.99, 5, IF(WC>=WMA10*0.98, 3, IF(WC>=WMA10*0.95, 1, 0)))); {周线价格位置}
+W_S2:=IF(WMA5>=WMA10*1.002 AND WMA10>=WMA20*0.992, 7, IF(WMA5>=WMA10*0.998 AND WMA10>=WMA20*0.988, 4, IF(WMA5>=WMA10*0.995 AND WMA10>=WMA20*0.985, 2, 0))); {周线均线排列}
+W_S3:=IF(WC>=HHV(WC,20)*0.96, 5, IF(WC>=HHV(WC,20)*0.93, 3, IF(WC>=HHV(WC,20)*0.88, 1, 0))); {周线创新高}
+W_S4:=IF(WMA5>=REF(WMA5,2)*1.002, 5, IF(WMA5>=REF(WMA5,2)*0.999, 3, IF(WMA5>=REF(WMA5,2)*0.995, 1, 0))); {周线短期动量}
+WEEK_SCORE:=W_S1+W_S2+W_S3+W_S4;         {周线趋势总分}
+
+{─── 维度B：价格结构质量（22分） ───}
+{突破形态评分}
+BRK_S1:=IF(C>REF(HHV(H,20),1)*1.005, 8, IF(C>REF(HHV(H,20),1)*1.0, 5, IF(C>REF(HHV(H,20),1)*0.998, 2, 0))); {突破力度}
+BRK_S2:=IF(C/REF(HHV(H,20),1)>=1.0 AND C/REF(HHV(H,20),1)<=1.02, 5, IF(C/REF(HHV(H,20),1)>=0.998 AND C/REF(HHV(H,20),1)<=1.04, 3, 0)); {突破质量}
+BRK_S3:=IF(BODY_RATIO>=0.55, 5, IF(BODY_RATIO>=0.42, 3, IF(BODY_RATIO>=0.35, 1, 0))); {阳线实体}
+BRK_S4:=IF(UP_SHADOW<=0.22, 4, IF(UP_SHADOW<=0.32, 2, IF(UP_SHADOW<=0.42, 1, 0))); {上影控制}
+BREAK_STRUCT:=BRK_S1+BRK_S2+BRK_S3+BRK_S4; {突破形态总分}
+{回踩再启动评分}
+PUL_S1:=IF(PULL_ZONE, 8, IF(COUNT(L<=MA13*1.03 AND L>=MA34*0.96, 8)>=1, 4, IF(COUNT(L<=MA13*1.04 AND L>=MA34*0.955, 8)>=1, 2, 0))); {回踩质量}
+PUL_S2:=IF(REF(V,1)<=REF(VMA5,1)*0.8 OR REF(V,2)<=REF(VMA5,2)*0.8, 5, IF(REF(V,1)<=REF(VMA5,1)*0.9 OR REF(V,2)<=REF(VMA5,2)*0.9, 3, 0)); {回踩缩量}
+PUL_S3:=IF(V>=REF(V,1)*1.12 AND V>=VMA5*0.95, 5, IF(V>=REF(V,1)*1.05 AND V>=VMA5*0.9, 3, IF(V>=REF(V,1)*1.0, 1, 0))); {再启动量能}
+PUL_S4:=IF((C>=H*0.98 OR C>=MA5) AND C>O, 4, IF((C>=H*0.97 OR C>=MA5) AND C>O, 2, IF(C>=MA5, 1, 0))); {再启动强度}
+PULL_STRUCT:=PUL_S1+PUL_S2+PUL_S3+PUL_S4; {回踩再启动总分}
+{趋势推进评分}
+TRD_S1:=IF(MA5>=MA13 AND MA13>=MA34 AND C>=MA5, 8, IF(MA5>=MA13 AND C>=MA5, 5, IF(C>=MA5, 3, 0))); {多头排列强度}
+TRD_S2:=IF(VMA5>=VMA20*1.05 AND VOL_STACK_DAYS>=5, 5, IF(VMA5>=VMA20 AND VOL_STACK_DAYS>=3, 3, IF(VMA5>=VMA20*0.95, 1, 0))); {堆量持续度}
+TRD_S3:=IF(C>=HHV(H,20)*0.99, 5, IF(C>=HHV(H,20)*0.96, 3, IF(C>=HHV(H,20)*0.93, 1, 0))); {创新高能力}
+TRD_S4:=IF(UP_SHADOW<=0.28, 4, IF(UP_SHADOW<=0.38, 2, 0)); {上影控制}
+TREND_STRUCT:=TRD_S1+TRD_S2+TRD_S3+TRD_S4; {趋势推进总分}
+{三种形态取最高分}
+STRUCT_SCORE:=MAX(IF(START_SETUP, BREAK_STRUCT, 0), MAX(IF(PULL_REPAIR, PULL_STRUCT, 0), IF(TREND_CONT, TREND_STRUCT, 0)));
+
+{─── 维度C：量能过程（18分，堆量>单日放量） ───}
+VOL_S1:=IF(VMA5>=VMA20*1.05 AND VOL_STACK_DAYS>=5 AND VMA5_SLOPE>=1.03, 6, IF(VMA5>=VMA20*1.02 AND VOL_STACK_DAYS>=4 AND VMA5_SLOPE>=1.01, 4, IF(VMA5>=VMA20 AND VOL_STACK_DAYS>=3, 2, IF(VMA5>=VMA20*0.95, 1, 0)))); {堆量持续性}
+VOL_S2:=IF(YANG_VOL_BIAS>=1.08 AND V>=VMA5*0.9, 5, IF(YANG_VOL_BIAS>=1.04, 3, IF(YANG_VOL_BIAS>=1.0, 1, 0))); {阳量阴量结构}
+VOL_S3:=IF(V>=VMA5*1.12 AND V>=VMA20*1.25, 4, IF(V>=VMA5*1.05 AND V>=VMA20*1.1, 2, IF(V>=VMA5*0.9, 1, 0))); {当日量能推进}
+VOL_S4:=IF(PULL_VOL_SHRINK, 3, IF(V<=VMA20*3.5 AND YANG_VOL_BIAS>=0.95, 2, IF(V<=VMA20*4.5, 1, 0))); {量能健康度}
+VOLUME_SCORE:=VOL_S1+VOL_S2+VOL_S3+VOL_S4; {量能过程总分}
+
+{─── 维度D：风控位置（15分） ───}
+RISK_S1:=IF(ATR_RISK>=0.028, 6, IF(ATR_RISK>=0.022, 4, IF(ATR_RISK>=0.016, 2, IF(ATR_RISK>=0.012, 1, 0)))); {风险收益比}
+RISK_S2:=IF(C/MA34<=1.06, 5, IF(C/MA34<=1.10, 3, IF(C/MA34<=1.14, 1, 0))); {距MA34位置}
+RISK_S3:=IF(COUNT((C-REF(C,1))/REF(C,1)*100<-9.5, 10)=0, 4, 0); {近10天无跌停}
+RISKREW_SCORE:=RISK_S1+RISK_S2+RISK_S3; {风控位置总分}
+
+{─── 维度E：日线均线结构（12分） ───}
+MA_S1:=IF(C>=MA13*1.002, 4, IF(C>=MA13*0.998, 2, IF(C>=MA13*0.995, 1, 0))); {价格vsMA13}
+MA_S2:=IF(MA5>=MA13*1.003, 4, IF(MA5>=MA13*1.0, 2, IF(MA5>=MA13*0.998, 1, 0))); {MA5vsMA13}
+MA_S3:=IF(MA13>=REF(MA13,3)*1.002, 4, IF(MA13>=REF(MA13,3)*1.000, 2, 0)); {MA13方向}
+DAILYMA_SCORE:=MA_S1+MA_S2+MA_S3;         {日线均线结构总分}
+
+{─── 维度F：MACD动能参考（8分） ───}
+MACD_S1:=IF(DIF>=DEA*1.002, 3, IF(DIF>=DEA, 2, IF(DIF>=DEA*0.998, 1, 0))); {DIFvsDEA}
+MACD_S2:=IF(DIF>=REF(DIF,2)*1.005, 3, IF(DIF>=REF(DIF,2)*0.99, 2, IF(DIF>=REF(DIF,2)*0.98, 1, 0))); {DIF趋势}
+MACD_S3:=IF(DIF>=0.01 OR (DIF<0 AND DIF>=REF(DIF,3)*1.015), 2, IF(DIF>=0, 1, 0)); {DIF零轴位置}
+MACD_MOM_SCORE:=MACD_S1+MACD_S2+MACD_S3;  {MACD动能总分}
+
+{─── 维度G：板块共振（8分） ───}
+HY_MA20:=MA(HY_INDEXC, 20);               {行业指数20日均线}
+HY_TREND_OK:=HY_INDEXC>=HY_MA20*0.985 AND HY_MA20>=REF(HY_MA20, 1); {行业趋势向上}
+HY_VS_MKT:=HY_INDEXC/REF(HY_INDEXC, 10)>=INDEXC/REF(INDEXC, 10);   {行业领先大盘}
+STK_VS_HY:=(C/REF(C, 10))>=(HY_INDEXC/REF(HY_INDEXC, 10));         {个股领先行业}
+HY_S1:=IF(HY_TREND_OK, 3, IF(HY_INDEXC>=HY_MA20*0.98, 1, 0));      {行业趋势得分}
+HY_S2:=IF(HY_VS_MKT, 3, 0);                                          {行业领先大盘得分}
+HY_S3:=IF(STK_VS_HY, 2, 0);                                          {个股领先行业得分}
+HY_RESO_SCORE:=IF(USE_HY=1, HY_S1+HY_S2+HY_S3, 0);                  {板块共振总分}
+
+{─── 综合评分（与择时器完全一致） ───}
+BURST_SCORE:=WEEK_SCORE+STRUCT_SCORE+VOLUME_SCORE+RISKREW_SCORE+DAILYMA_SCORE+MACD_MOM_SCORE+HY_RESO_SCORE; {七维度总分0~108}
+
+{═══════════════════════════════════════════════════════════════}
+{  统一介入信号（三路合并，与择时器100%一致）                   }
+{  正常介入 + 涨停后介入 + 强势横盘介入 → ENTER_SIG            }
+{═══════════════════════════════════════════════════════════════}
+
+{─── 通用前提 ───}
+ENT_VOL_OK:=VMA5>=VMA20 AND VOL_STACK_DAYS>=3;     {堆量确认}
+ENT_ACT_OK:=C>=O AND V>=VMA5*0.85 AND C>=H*0.96;   {当日主动性}
+GAP_5_13:=(MA5-MA13)/MA13;                          {MA5与MA13开口比率}
+GAP_WIDEN:=GAP_5_13>=REF(GAP_5_13,1)*0.998 AND REF(GAP_5_13,1)>=REF(GAP_5_13,2)*0.998; {开口逐日不缩小}
+MA_AMPLIFY:=GAP_5_13>=0.004 AND GAP_WIDEN;          {均线放大确认}
+NO_BREAK_250:=COUNT(C<MA250,30)=0;                   {近30天无破年线}
+SAFE_ABOVE_250:=C>=MA250*1.03;                       {在年线上方3%以上}
+MA250_TREND_OK:=NO_BREAK_250 AND SAFE_ABOVE_250;     {年线趋势确认}
+
+{─── 路径一：正常介入 ───}
+ENTER_RAW:=GATE_ALL AND BURST_SCORE>=75 AND ENT_VOL_OK AND ENT_ACT_OK AND MA_AMPLIFY AND MA250_TREND_OK AND PEAK_FILTER AND STRICT_OK AND MKT_FILTER; {正常介入条件}
+IS_LIMIT_UP:=PCT_CHG>=9.5;                           {涨停日判定}
+NORMAL_ENTER:=ENTER_RAW AND NOT(IS_LIMIT_UP);         {非涨停日→当天触发}
+
+{─── 路径二：涨停后介入 ───}
+LIMIT_BURST:=ENTER_RAW AND IS_LIMIT_UP;               {涨停日触发：记录基准}
+AFTER_LIMIT:=BARSLAST(LIMIT_BURST)>=2 AND BARSLAST(LIMIT_BURST)<=7; {涨停后2~7天窗口}
+LMT_CLOSE:=REF(C, BARSLAST(LIMIT_BURST));             {涨停日收盘价}
+LMT_VOL:=REF(V, BARSLAST(LIMIT_BURST));               {涨停日成交量}
+LMT_PULLED:=LLV(L, BARSLAST(LIMIT_BURST))<=LMT_CLOSE*0.98; {①有过2%以上回调}
+LMT_STAND:=C>O AND C>=MA13;                            {②阳线站上MA13}
+LMT_SHRINK:=V<LMT_VOL*0.65 AND V<=VMA5;                {③缩量至涨停量65%以下}
+LIMIT_ENTER:=AFTER_LIMIT AND LMT_PULLED AND LMT_STAND AND LMT_SHRINK; {涨停后介入成立}
+
+{─── 路径三：强势横盘介入 ───}
+ABOVE_MA5:=COUNT(C>=MA5*0.995, 5)>=4;                 {近5天4天收在MA5上方}
+STRONG_ENTRY:=GATE_ALL AND BURST_SCORE>=75 AND ENT_VOL_OK AND MA_AMPLIFY AND ABOVE_MA5 AND MA250_TREND_OK AND STRICT_OK AND MKT_FILTER; {强势横盘介入}
+
+{─── 三路合并 ───}
+ENTER_ALL_RAW:=NORMAL_ENTER OR LIMIT_ENTER OR STRONG_ENTRY; {三路汇总}
+ENTER_SIG:=FILTER(ENTER_ALL_RAW,5);                   {最终介入信号：5根K线间隔}
+
+{═══════════════════════════════════════════════════════════════}
+{  选股筛选模块                                                 }
+{═══════════════════════════════════════════════════════════════}
+
+{─── 基础过滤（排除不合格标的） ───}
+NON_ST:=NOT(NAMELIKE('ST')) AND NOT(NAMELIKE('*ST')); {排除ST和*ST股票}
+NON_NEW:=BARSCOUNT(C)>250;                              {排除上市不足250天的新股}
+MAIN_BOARD:=CODELIKE('60') OR CODELIKE('00');           {只选主板（60/00开头）}
+FLOAT_MKT_CAP:=FINANCE(40)/100000000;                    {流通市值（亿元）}
+MKT_CAP_OK:=FLOAT_MKT_CAP>20 AND FLOAT_MKT_CAP<1000;    {流通市值20~1000亿}
+BASE_MKT_OK:=NON_ST AND NON_NEW AND MAIN_BOARD AND MKT_CAP_OK; {基础过滤通过}
+
+{─── 250日均线过滤 ───}
+MA250_OK:=C>=MA250;                                     {收盘在250日线上方}
+
+{─── 板块共振硬过滤（三层全过才放行） ───}
+{注意：HY_TREND_OK, HY_VS_MKT, STK_VS_HY 已在维度G中定义}
+HY_RESONATE:=HY_TREND_OK AND HY_VS_MKT AND STK_VS_HY;  {板块共振：行业趋势+行业强于大盘+个股强于行业}
+HY_FILTER:=IF(USE_HY=1, HY_RESONATE, 1);                {板块共振开关}
+
+{─── 介入信号检测 ───}
+SIGNAL_OK:=COUNT(ENTER_SIG, 3)>=1;                     {近3个交易日内至少出现过1次介入信号}
+
+{─── 硬过滤汇总（全部必须通过） ───}
+BASE_HARD_OK:=SIGNAL_OK AND BASE_MKT_OK AND MA250_OK AND HY_FILTER; {四重硬过滤}
+
+{═══════════════════════════════════════════════════════════════}
+{  选股器独立评分系统（用于排序优选，不同于择时器的触发评分）  }
+{═══════════════════════════════════════════════════════════════}
+SCORE_MIN:=60; SCORE_OBS:=70; SCORE_GOOD:=80;          {评分阈值：60可观察/70优先观察/80优秀}
+
+{─── 趋势结构分（满分28分） ───}
+{评估均线排列和趋势完整性}
+TREND_SCORE:=
+IF(C>=MA13,4,0)+IF(C>=MA34,4,0)+IF(MA5>=MA13,4,0)+IF(MA13>=MA34,4,0) {价格vs均线：站上13日线+4 站上34日线+4 MA5>MA13+4 MA13>MA34+4}
++IF(MA34>=MA55,3,0)+IF(MA13>=REF(MA13,3)*1.001,3,0)    {中长期均线：34日>55日+3 MA13向上+3}
++IF(MA34>=REF(MA34,5)*1.001,3,0)+IF(C>=HHV(H,20)*0.965,3,0); {趋势健康：MA34向上+3 接近20日新高+3}
+
+{─── RS相对强度分（满分16分） ───}
+{评估个股相对大盘的强弱，强于大盘加分}
+RS20:=(C/REF(C,20))/(INDEXC/REF(INDEXC,20));            {20日相对强度：个股涨幅/大盘涨幅}
+RS60:=(C/REF(C,60))/(INDEXC/REF(INDEXC,60));            {60日相对强度}
+RS_SCORE:=
+IF(RS20>1.02,4,0)+IF(RS20>1.05,4,0)                     {RS20强度：>1.02+4 >1.05再加4}
++IF(RS60>1.00,3,0)+IF(RS60>1.03,3,0)                    {RS60强度：>1.00+3 >1.03再加3}
++IF(RS20>=REF(RS20,5),1,0)                               {RS20趋势：不下降+1}
++IF(MA(RS20,5)>=REF(MA(RS20,5),5),1,0);                 {RS20均线趋势：向上+1}
+
+{─── 量价健康分（满分16分） ───}
+{评估量价配合程度}
+VOL_SCORE:=
+IF(V>=VMA20*0.9,3,0)+IF(V>=VMA5*1.05,3,0)               {量能水平：≥20日均量+3 ≥5日均量+3}
++IF(V>=REF(V,1)*1.02,2,0)                                {量能环比：放量+2}
++IF(COUNT(V>VMA20*1.1,5)>=2,3,0)                         {量能持续性：近5天2天放量+3}
++IF(BODY_RATIO>=0.32,2,0)                                 {K线实体：实体≥32%+2}
++IF(UP_SHADOW<=0.42,2,0)                                  {上影控制：上影≤42%+2}
++IF(PCT_CHG<=8.5,1,0);                                    {涨幅控制：非过度追涨+1}
+
+{─── 筹码结构分（满分12分） ───}
+{评估筹码分布和换手率}
+CHIP_SCORE:=
+IF(WINNER(C)<0.70,4,0)                                    {获利盘：<70%+4（上方抛压轻）}
++IF(WINNER(C)<0.85,2,0)                                  {获利盘：<85%再加2}
++IF(COST(85)/C<1.12,3,0)                                 {成本压力：85%筹码距现价<12%+3}
++IF(HSL>2.5,2,0)                                          {换手活跃：>2.5%+2（有流动性）}
++IF(HSL<18,1,0);                                          {换手正常：<18%+1（非过度投机）}
+
+{─── 趋势持续性分（满分14分） ───}
+{评估趋势的持续性，排除一日脉冲}
+HIGH_UP:=HHV(H,10)>=REF(HHV(H,10),5)*1.01;              {10日高点抬升}
+LOW_UP:=LLV(L,10)>=REF(LLV(L,10),5)*0.995;              {10日低点不破坏}
+TREND_KEEP:=COUNT(C>MA13,10)>=8;                         {10日内8天站上MA13}
+ENT_CLOSE_REF:=REF(C, BARSLAST(ENTER_SIG));              {最近介入信号日的收盘价}
+ENT_DAYS_REF:=BARSLAST(ENTER_SIG)+1;                     {距介入信号的天数}
+TCONT_SCORE:=
+IF(HIGH_UP,4,0)+IF(LOW_UP,3,0)                            {高低点趋势：高点上移+4 低点不破+3}
++IF(TREND_KEEP,4,0)                                       {均线承接：站上MA13的天数多+4}
++IF(COUNT(C>=ENT_CLOSE_REF*0.98,MIN(ENT_DAYS_REF,5))>=3,3,0); {信号后站稳：收盘在介入价上方+3}
+
+{─── 主升质量分（满分14分） ───}
+{额外加分项，强趋势票自然得分更高}
+BREAK_BURST:=START_SETUP AND C>=REF(HHV(H,20),1)*0.998;  {突破结构}
+PULL_BURST:=PULL_REPAIR AND C>=REF(HHV(H,5),1)*0.998;    {回踩结构}
+BONUS_SCORE:=
+IF(MACD_UP,3,0)                                            {MACD向上+3}
++IF(DIF>=0,2,0)                                            {DIF在零轴上+2}
++IF(BREAK_BURST,3,0)                                       {突破结构+3}
++IF(PULL_BURST,3,0)                                        {回踩结构+3}
++IF(W_UP,3,0);                                              {周线向上+3}
+
+{─── 风险扣分（只扣不加，评估过热和风险） ───}
+RISE_30D:=(C-LLV(C,30))/LLV(C,30);                       {30日涨幅}
+RISE_60D:=(C-LLV(C,60))/LLV(C,60);                       {60日涨幅}
+RISE_120D:=(C-LLV(C,120))/LLV(C,120);                    {120日涨幅}
+MAX_RISE_120D:=(HHV(H,120)-LLV(L,120))/LLV(L,120);      {120日最大振幅}
+LUP_60D:=COUNT((C-REF(C,1))/REF(C,1)*100>=9.5,60);      {60天内涨停次数}
+LUP_120D:=COUNT((C-REF(C,1))/REF(C,1)*100>=9.5,120);    {120天内涨停次数}
+DEAD_VOL_RISK:=IF(V>=HHV(V,60)*0.95,1,0)*IF(PCT_CHG<1.5,1,0)*5; {天量滞涨扣5}
+UPPER_FAIL_RISK:=IF(V>VMA20*1.8,1,0)*IF(UP_SHADOW>0.45,1,0)*IF(C<REF(C,1)*1.01,1,0)*5; {冲高回落扣5}
+TECH_RISK_SCORE:=                                            {技术风险扣分}
+IF(COUNT((C-REF(C,1))/REF(C,1)*100<-9.5,10)>0,6,0)          {近10天接近跌停：扣6}
++DEAD_VOL_RISK                                                {天量滞涨：扣5}
++UPPER_FAIL_RISK;                                             {冲高回落：扣5}
+HOT_RISK_SCORE:=                                              {情绪过热扣分}
+IF(PCT_CHG>=9.5,8,0)                                          {当天涨停：扣8}
++IF(RISE_60D>=0.60,6,0)                                       {60日涨幅过大：扣6}
++IF(RISE_120D>=1.00,8,0)                                      {120日涨幅过大：扣8}
++IF(MAX_RISE_120D>=1.60,8,0)                                  {半年最大振幅过大：扣8}
++IF(LUP_120D>=4,6,0)                                          {半年涨停次数过多：扣6}
++IF(RISE_30D>=0.45,4,0)                                       {30日急涨：扣4}
++IF(LUP_60D>=3,4,0);                                          {60日涨停过多：扣4}
+RISK_SCORE:=TECH_RISK_SCORE+HOT_RISK_SCORE;                {总风险扣分}
+
+{─── 总分计算 ───}
+TOTAL_SCORE:=TREND_SCORE+RS_SCORE+VOL_SCORE+CHIP_SCORE+TCONT_SCORE+BONUS_SCORE-RISK_SCORE; {独立评分总分}
+QUALITY_LEVEL:=IF(TOTAL_SCORE>=SCORE_GOOD,3,IF(TOTAL_SCORE>=SCORE_OBS,2,IF(TOTAL_SCORE>=SCORE_MIN,1,0))); {质量等级}
+
+{═══════════════════════════════════════════════════════════════}
+{  选股输出                                                     }
+{  条件选股公式不支持DRAWNUMBER/DRAWTEXT                       }
+{═══════════════════════════════════════════════════════════════}
+XG:BASE_HARD_OK AND TOTAL_SCORE>=SCORE_MIN;                {最终选股：四重硬过滤 + 独立评分≥60}
+{如改为技术指标公式，可恢复下面的显示行：}
+{DRAWNUMBER(XG,HIGH,TOTAL_SCORE);}
+{DRAWTEXT(XG AND TOTAL_SCORE>=SCORE_GOOD,HIGH*1.03,'优秀');}
+{DRAWTEXT(XG AND TOTAL_SCORE>=SCORE_MIN AND TOTAL_SCORE<SCORE_GOOD,HIGH*1.02,'可观察');}
