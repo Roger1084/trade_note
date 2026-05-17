@@ -5,7 +5,7 @@
 USE_MKT:=0;       {大盘指数过滤}
 USE_WEEK:=1;      {周线趋势过滤：只做周线趋势向上的个股}
 USE_STRICT:=0;    {严格模式：打开后更偏突破确认，信号更少}
-USE_CAUTIOUS_STOP:=1; {1=更谨慎止损：白虚线抬高，更早防守；0=沿用原 ATR 倍数与风险下限}
+CAUTIOUS_STOP:=1; {1=更谨慎止损：白虚线抬高，更早防守；0=沿用原 ATR 倍数与风险下限}
 {说明：市场状态和板块强度已放到选股公式，本公式主要负责个股择时；因此 USE_MKT 默认关闭。}
 {说明：USE_WEEK 默认打开，是为了避免日线小反弹误判为趋势启动，只在周线背景不差时寻找爆点。}
 
@@ -49,18 +49,18 @@ ATR14:=MA(TRUE_RANGE_VAL,14);
 ATR_MA20:=MA(ATR14,20);
 ATR_PCT:=ATR14/C;
 {止损线：K 越小则从均线下扣得越少，线越高，越谨慎（离现价更近）；原默认 1.2 / 0.6}
-ATR_STOP_K13:=IF(USE_CAUTIOUS_STOP=1,1.0,1.2);
-ATR_STOP_K34:=IF(USE_CAUTIOUS_STOP=1,0.48,0.6);
+ATR_STOP_K13:=IF(CAUTIOUS_STOP=1,1.0,1.2);
+ATR_STOP_K34:=IF(CAUTIOUS_STOP=1,0.48,0.6);
 ATR_STOP:=MAX(MA13-ATR14*ATR_STOP_K13,MA34-ATR14*ATR_STOP_K34);
 ATR_RISK:=(C-ATR_STOP)/C;
 ATR_VOL_OK:=ATR14>=ATR_MA20*0.75 AND ATR14<=ATR_MA20*2.2 AND ATR_PCT>=0.012 AND ATR_PCT<=0.085;
 {更紧止损时现价到线的距离略小，风险下限略降，避免爆点条件与画线逻辑打架}
-ATR_RISK_MIN:=IF(USE_CAUTIOUS_STOP=1,0.012,0.015);
+ATR_RISK_MIN:=IF(CAUTIOUS_STOP=1,0.012,0.015);
 ATR_RISK_OK:=ATR_RISK>=ATR_RISK_MIN AND ATR_RISK<=0.095 AND C<=MA13+ATR14*3.2;
 ATR_OK:=ATR_VOL_OK AND ATR_RISK_OK;
 {说明：ATR（平均真实波幅）用于衡量个股自身波动，而不是用固定百分比一刀切。}
 {ATR_VOL_OK 过滤两类低质量机会：波动过小的僵尸股，以及短期波动过热的情绪股。}
-{ATR_STOP 使用 MA13 和 MA34 结合 ATR 生成动态风控线，适配不同波动率的股票；USE_CAUTIOUS_STOP=1 时倍数更紧。}
+{ATR_STOP 使用 MA13 和 MA34 结合 ATR 生成动态风控线，适配不同波动率的股票；CAUTIOUS_STOP=1 时倍数更紧。}
 {ATR_RISK 表示现价到风控线的距离；太近容易被正常波动洗出，太远则追涨风险过高。}
 {ATR_RISK_OK 的意义是：爆点出现时必须离止损位合理，做到有启动弹性也有风控边界。}
 
@@ -420,7 +420,7 @@ DRAWNUMBER(BURST_SIG OR ENTER_SIG,HIGH*1.1,TOTAL_SCORE),COLORWHITE;
 
 {--- 辅助画线 ---}
 STOP_LINE:ATR_STOP,DOTLINE,COLORWHITE;
-{说明：风控线为 ATR_STOP，随波动率变化；USE_CAUTIOUS_STOP=1 时线更贴近均线、更谨慎。}
+{说明：风控线为 ATR_STOP，随波动率变化；CAUTIOUS_STOP=1 时线更贴近均线、更谨慎。}
 
 {涨跌停K线染色}
 STICKLINE(CLOSE/REF(C,1)>=1.095,O,C,2,0),COLORYELLOW;
