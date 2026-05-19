@@ -1,0 +1,90 @@
+{═══════════════════════════════════════════
+  大盘强弱判断 - 副图指标
+  免费通达信可用，用于上证/深证日线
+  红柱=强  绿柱=弱  灰柱=中性
+═══════════════════════════════════════════}
+
+{========== 1. 均线系统 ==========}
+MA5 := MA(C,5);
+MA10 := MA(C,10);
+MA20 := MA(C,20);
+MA60 := MA(C,60);
+
+MA1 := IF(C > MA5, 8, 0);
+MA2 := IF(C > MA20, 8, 0);
+MA3 := IF(C > MA60, 4, 0);
+MA4 := IF(MA5 > MA20, 5, 0);
+MA5X := IF(MA5 > MA10 AND MA10 > MA20, 5, 0);
+均线得分 := MA1 + MA2 + MA3 + MA4 + MA5X;
+
+{========== 2. 量价关系 ==========}
+MV5 := MA(V,5);
+MV20 := MA(V,20);
+
+Q1 := IF(C>REF(C,1) AND V>MV5*1.1, 15, 0);
+Q2 := IF(C>REF(C,1) AND V>MV5, 8, 0);
+Q3 := IF(C>REF(C,1) AND V<MV5*0.7, -8, 0);
+Q4 := IF(C<REF(C,1) AND V>MV20*1.2, -15, 0);
+Q5 := IF(C<REF(C,1) AND V<MV5*0.8, 2, 0);
+量价得分 := Q1 + Q2 + Q3 + Q4 + Q5;
+
+{========== 3. 趋势强度 ==========}
+涨幅5日 := (C - REF(C,5)) / REF(C,5) * 100;
+涨幅10日 := (C - REF(C,10)) / REF(C,10) * 100;
+
+T1 := IF(涨幅5日 > 2, 8, 0);
+T2 := IF(涨幅5日 > 0 AND 涨幅5日 <= 2, 3, 0);
+T3 := IF(涨幅5日 < -2, -8, 0);
+T4 := IF(涨幅10日 > 5, 5, 0);
+T5 := IF(涨幅10日 < -5, -5, 0);
+T6 := IF(C > HHV(C,20)*0.95, 4, 0);
+T7 := IF(C < LLV(C,20)*1.05, -4, 0);
+趋势得分 := T1 + T2 + T3 + T4 + T5 + T6 + T7;
+
+{========== 4. 波动率 ==========}
+振幅 := (H - L) / REF(C,1) * 100;
+
+B1 := IF(振幅 < 1.5 AND C>REF(C,1), 5, 0);
+B2 := IF(振幅 > 3 AND C<REF(C,1), -8, 0);
+B3 := IF(振幅 > 3 AND C>REF(C,1), 3, 0);
+波控得分 := B1 + B2 + B3;
+
+{========== 5. 连阳连阴 ==========}
+连3阳 := COUNT(C>REF(C,1), 3) = 3;
+连3阴 := COUNT(C<REF(C,1), 3) = 3;
+连5阳 := COUNT(C>REF(C,1), 5) = 5;
+
+Y1 := IF(连3阳, 6, 0);
+Y2 := IF(连5阳, 4, 0);
+Y3 := IF(连3阴, -6, 0);
+阴阳得分 := Y1 + Y2 + Y3;
+
+{========== 汇总 ==========}
+总分 := 均线得分 + 量价得分 + 趋势得分 + 波控得分 + 阴阳得分;
+
+{========== 输出柱状图 ==========}
+STICKLINE(总分>=40, 总分, 0, 2.5, 0), COLORRED;
+STICKLINE(总分>=20 AND 总分<40, 总分, 0, 2.5, 0), COLORMAGENTA;
+STICKLINE(总分>=0 AND 总分<20, 总分, 0, 2.5, 0), COLORGRAY;
+STICKLINE(总分>=-20 AND 总分<0, 总分, 0, 2.5, 0), COLORGREEN;
+STICKLINE(总分<-20, 总分, 0, 2.5, 0), COLORCYAN;
+
+{========== 参考线 ==========}
+40, COLORRED, DOTLINE;
+20, COLORMAGENTA, DOTLINE;
+0, COLORGRAY, DOTLINE;
+-20, COLORGREEN, DOTLINE;
+
+{========== 底部文字提示 ==========}
+DRAWTEXT(ISLASTBAR, 45, ' 强'), COLORRED;
+DRAWTEXT(ISLASTBAR, 25, ' 偏强'), COLORMAGENTA;
+DRAWTEXT(ISLASTBAR, 5, ' 中性'), COLORGRAY;
+DRAWTEXT(ISLASTBAR, -15, ' 偏弱'), COLORGREEN;
+DRAWTEXT(ISLASTBAR, -30, ' 弱'), COLORCYAN;
+
+{========== 关键信号标记 ==========}
+放量长阳 := C > REF(C,1)*1.02 AND V > MV5*1.5;
+DRAWICON(放量长阳 AND 总分>0, 总分+5, 1);
+
+放量长阴 := C < REF(C,1)*0.98 AND V > MV5*1.5;
+DRAWICON(放量长阴, 总分-5, 2);
