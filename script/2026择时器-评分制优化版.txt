@@ -26,7 +26,6 @@
 {───────────────────────────────────────────────────────────────}
 {  开关设置：0=关闭，1=启用                                    }
 {───────────────────────────────────────────────────────────────}
-USE_MKT:=0;       {是否启用大盘指数过滤：1=大盘不好时压制所有信号}
 USE_WEEK:=1;      {是否启用周线趋势过滤：1=只在周线上升趋势中操作（默认开启）}
 USE_STRICT:=0;    {是否启用严格模式：1=额外要求量能+MACD同时走强，信号更少}
 CAUTIOUS_STOP:=1; {是否启用谨慎止损：1=ATR止损线更贴近均线，防守更早}
@@ -193,13 +192,6 @@ PEAK_ACT_OK:=C>=O AND C>=H*0.95;        {阻力位突破主动性：阳线且收
 PEAK_BREAK:=PEAK_VOL_OK AND PEAK_ACT_OK; {有效突破确认}
 PEAK_FILTER:=IF(NEAR_PEAK, PEAK_BREAK, 1); {阻力过滤器：近阻力→需突破确认，否则直接放行}
 
-{───────────────────────────────────────────────────────────────}
-{  大盘指数过滤（默认关闭，避免信号被压没）                      }
-{───────────────────────────────────────────────────────────────}
-MKT_MA20:=MA(INDEXC,20);                {大盘20日均线}
-MKT_MA60:=MA(INDEXC,60);                {大盘60日均线}
-MKT_OK:=INDEXC>=MKT_MA20*0.985 OR MKT_MA20>=REF(MKT_MA20,1) OR INDEXC>=MKT_MA60; {大盘环境OK：站上20日线或20日线向上或站上60日线}
-MKT_FILTER:=IF(USE_MKT=1, MKT_OK, 1);   {大盘过滤开关}
 STRICT_OK:=IF(USE_STRICT=1, VOL_UP AND MACD_UP AND (START_SETUP OR PULL_REPAIR OR TREND_CONT OR OPEN_START), 1); {严格模式：额外要求放量+MACD向上+结构成立}
 
 {═══════════════════════════════════════════════════════════════}
@@ -355,7 +347,7 @@ MA250_OK_USE:=MA250_TREND_OK OR (OPEN_START AND MA250_OPEN_OK);
 
 {─── 路径一：正常介入（NORMAL_ENTER） ───}
 {关卡全过+评分+堆量+阳线主动性+均线放大(含开口放宽)+年线+阻力确认}
-ENTER_RAW:=GATE_ALL AND ENT_SCORE_OK AND ENT_VOL_OK AND ENT_ACT_OK AND MA_AMPLIFY_USE AND MA250_OK_USE AND PEAK_FILTER AND STRICT_OK AND MKT_FILTER;
+ENTER_RAW:=GATE_ALL AND ENT_SCORE_OK AND ENT_VOL_OK AND ENT_ACT_OK AND MA_AMPLIFY_USE AND MA250_OK_USE AND PEAK_FILTER AND STRICT_OK;
 IS_LIMIT_UP:=PCT_CHG>=9.5;                  {涨停日判定}
 NORMAL_ENTER:=ENTER_RAW AND NOT(IS_LIMIT_UP); {正常介入：满足ENTER_RAW且非涨停日→当天触发}
 
@@ -374,10 +366,10 @@ LIMIT_ENTER:=AFTER_LIMIT AND LMT_PULLED AND LMT_STAND AND LMT_SHRINK; {涨停后
 {须近5日回踩过MA5/MA13后再站回，禁止纯高位横盘追涨}
 ABOVE_MA5:=COUNT(C>=MA5*0.995, 5)>=4;       {近5天有4天收盘在MA5上方}
 STR_PULL:=COUNT(L<=MA5*1.015 OR L<=MA13*1.02, 5)>=1; {近5日有回踩承接}
-STRONG_ENTRY:=GATE_ALL AND ENT_SCORE_OK AND ENT_VOL_OK AND ENT_ACT_OK AND MA_AMPLIFY_USE AND ABOVE_MA5 AND STR_PULL AND MA250_OK_USE AND STRICT_OK AND MKT_FILTER AND NOT(AT_20HIGH); {强势横盘介入}
+STRONG_ENTRY:=GATE_ALL AND ENT_SCORE_OK AND ENT_VOL_OK AND ENT_ACT_OK AND MA_AMPLIFY_USE AND ABOVE_MA5 AND STR_PULL AND MA250_OK_USE AND STRICT_OK AND NOT(AT_20HIGH); {强势横盘介入}
 
 {─── 路径四：开口启动介入（OPEN_ENTER）锚定后3日内，防重复用FILTER ───}
-OPEN_ENTER_RAW:=OPEN_START AND GATE_WEEK AND GATE_VOL AND GATE_MA250 AND CHASE_OK AND ENT_SCORE_OK AND ENT_VOL_OK AND ENT_ACT_OPEN AND MA_AMPLIFY_OPEN AND MA250_OK_USE AND PEAK_FILTER AND STRICT_OK AND MKT_FILTER;
+OPEN_ENTER_RAW:=OPEN_START AND GATE_WEEK AND GATE_VOL AND GATE_MA250 AND CHASE_OK AND ENT_SCORE_OK AND ENT_VOL_OK AND ENT_ACT_OPEN AND MA_AMPLIFY_OPEN AND MA250_OK_USE AND PEAK_FILTER AND STRICT_OK;
 OPEN_ENTER:=OPEN_ENTER_RAW AND NOT(IS_LIMIT_UP) AND NOT(START_SETUP) AND NOT(PULL_REPAIR); {与突破/回踩重复时优先原结构，开口作补充}
 
 {─── 路径五：阴线缩量回踩→弱转强介入（YIN_ENTER） ───}
@@ -394,7 +386,7 @@ YIN_MA_OK:=MA13>=REF(MA13,3)*0.999 AND (MA5>=MA13*0.995 OR C>=MA5);
 YIN_STRICT:=IF(USE_STRICT=1, DIF>=DEA AND DIF>=REF(DIF,1), 1);
 YIN_NOT_DUP:=NOT(PULL_REPAIR) AND NOT(START_SETUP) AND NOT(OPEN_START);
 YIN_PULL_USE:=(YIN_ENT_NXT AND YIN_PULL_OK) OR YIN_HAMMER; {次日须历史阴线回踩；锤头可当日自成一体}
-YIN_ENTER_RAW:=IF(USE_YIN_PULL=1, GATE_YIN_BASE AND YIN_PULL_USE AND ENT_YIN_ACT AND ENT_SCORE_YIN AND ENT_VOL_YIN AND YIN_MA_OK AND YIN_MA250 AND PEAK_FILTER AND YIN_STRICT AND MKT_FILTER AND YIN_NOT_DUP AND NOT(IS_LIMIT_UP) AND NOT(AT_60HIGH), 0);
+YIN_ENTER_RAW:=IF(USE_YIN_PULL=1, GATE_YIN_BASE AND YIN_PULL_USE AND ENT_YIN_ACT AND ENT_SCORE_YIN AND ENT_VOL_YIN AND YIN_MA_OK AND YIN_MA250 AND PEAK_FILTER AND YIN_STRICT AND YIN_NOT_DUP AND NOT(IS_LIMIT_UP) AND NOT(AT_60HIGH), 0);
 YIN_ENTER:=YIN_ENTER_RAW AND NOT(ENTER_RAW) AND NOT(STRONG_ENTRY); {阴线回踩作补充，不与阳线主路径重复}
 
 {─── 五路合并输出 ───}
@@ -502,29 +494,3 @@ STOP_LINE:ATR_STOP,DOTLINE,COLORWHITE;     {白色虚线：ATR动态止损参考
 {─── 涨跌停K线染色 ───}
 STICKLINE(CLOSE/REF(C,1)>=1.095,O,C,2,0),COLORYELLOW; {涨停K线染黄色}
 STICKLINE(CLOSE/REF(C,1)<=0.905,O,C,2,0),COLORGREEN;  {跌停K线染绿色}
-
-{═══════════════════════════════════════════════════════════════}
-{  版本迭代日志                                                 }
-{═══════════════════════════════════════════════════════════════}
-{基础版本对比2026择时器-爆信号优化版.txt主要改动：}
-{1. 爆信号：从13+二元AND条件 → 4Gate+6维评分≥78}
-{2. 进信号：从"不坏就进" → "必须方向性推进"（后合并为统一介入信号）}
-{3. 权重分配(v18)：结构26 > 量能22 > 周线20 > 均线21 > MACD12 > 风控13；板块不计分}
-{4. FILTER周期=5 抑制连续重复信号}
-{v2(2026-05)：全维度增加3~4档梯度+收紧高分门槛。GATE_VOL 0.7→0.85。BURST阈值70→78}
-{v3(2026-05)：量能维度重构——从单日快照改为堆量过程模式。新增6个堆量指标}
-{v4(2026-05)：统一介入信号——取消爆→进二段式流程，合并为单一ENTER_SIG}
-{v5(2026-05)：新增PEAK_FILTER 前高阻力过滤}
-{v6(2026-05)：新增TREND_CONT 第三种价格结构，覆盖趋势推进形态}
-{v9(2026-05)：涨停后介入简化为回调2%+阳线站MA13+缩量三条件}
-{v10(2026-05)：MA_DIVERGE→MA_AMPLIFY升级，要求连续2天开口不缩小}
-{v11(2026-05)：MA250_TREND_OK 下行趋势排除（30天不破年线+距年线3%以上）}
-{v12(2026-05)：新增强势横盘介入STRONG_ENTRY（均线放大+5天4天站MA5）}
-{v13(2026-05)：新增维度G板块共振评分(8分)。SCORE阈值60/72/82适配108满分}
-{v14(2026-05)：防追高——USE_ANTI_CHASE/GATE_CHASE；USE_TREND_CONT默认0；收紧GATE_POS/PEAK；STRONG_ENTRY须回踩；ENT_SCORE_OK延伸加分}
-{v15(2026-05)：新增形态4开口启动MA_OPEN_START——交缠锚定+3日窗口+独立OPEN_RISK_OK；OPEN_ENTER第四路径；MA_AMPLIFY_OPEN放宽初段开口}
-{v16(2026-05)：实盘权重校准——B26+C22+G14（B+C+G占57%）；A20/D13/E9/F4下调；介入72/延伸78/开口71；评级58/70/80}
-{v17(2026-05)：取消板块计分(G→0仅展示)；E9→18、F4→9（原G14分并入）；B26+C22+A20+D13+E18+F9=108}
-{v18(2026-05)：均线/MACD强势评判加强——E18→21(强势档8分+开口斜率+MA_S_BONUS)、F9→12(柱体扩张+MD_S_BONUS)；满分111}
-{v19(2026-05)：第五路径YIN_ENTER——阴线缩量回踩MA带(YIN_PULL_D)+次日弱转强(YIN_ENT_NXT)/当日锤头(YIN_HAMMER)；USE_YIN_PULL开关；与阳线主路径去重}
-{v19.1(2026-05)：行业/大盘涨跌%展示层计算；末K线REF昨收为0时改用HY_INDEXO/INDEXO开盘涨幅}
