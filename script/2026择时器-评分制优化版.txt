@@ -178,6 +178,13 @@ OPEN_START:=OPEN_START_CORE AND OPEN_RISK_OK;
 OPEN_CHASE_OK:=OPEN_START AND NOT_STALE_HI AND OPEN_RISK_OK;
 CHASE_OK:=IF(USE_ANTI_CHASE=1, (NOT_STALE_HI AND EXTEND_OK AND HEAT_OK AND NOT(STALL_VOL) AND NOT(AT_60HIGH)) OR OPEN_CHASE_OK, 1);
 
+{─── 250日年线硬过滤（须在 Layer0 GATE_MA250 之前定义） ───}
+NO_BREAK_250:=COUNT(C<MA250,30)=0;          {近30天无收盘跌破250日线：说明没有进入熊市区域}
+SAFE_ABOVE_250:=C>=MA250*1.03;              {当前在年线上方3%以上：不是贴线挣扎，趋势稳固}
+MA250_TREND_OK:=NO_BREAK_250 AND SAFE_ABOVE_250; {年线趋势确认}
+MA250_OPEN_OK:=C>=MA250*1.01 AND COUNT(C<MA250,30)<=3; {开口启动：刚站上年线或浅幅回踩后重启}
+MA250_OK_USE:=MA250_TREND_OK OR (OPEN_START AND MA250_OPEN_OK);
+
 {───────────────────────────────────────────────────────────────}
 {  前高阻力与突破确认（条件性过滤器）                            }
 {───────────────────────────────────────────────────────────────}
@@ -332,13 +339,6 @@ ENT_SCORE_OK:=(BURST_SCORE>=72 AND (C/MA34<=1.12 OR BURST_SCORE>=78)) OR (OPEN_S
 MA_AMPLIFY:=GAP_5_13>=0.004 AND GAP_WIDEN;  {标准放大：开口≥0.4%且持续扩大}
 MA_AMPLIFY_OPEN:=OPEN_START AND GAP_5_13>=0.0012 AND OPEN_WIDEN; {开口启动：捕捉初段开口，不要求达0.4%}
 MA_AMPLIFY_USE:=MA_AMPLIFY OR MA_AMPLIFY_OPEN;
-
-{─── 下行趋势排除（250日年线硬过滤） ───}
-NO_BREAK_250:=COUNT(C<MA250,30)=0;          {近30天无收盘跌破250日线：说明没有进入熊市区域}
-SAFE_ABOVE_250:=C>=MA250*1.03;              {当前在年线上方3%以上：不是贴线挣扎，趋势稳固}
-MA250_TREND_OK:=NO_BREAK_250 AND SAFE_ABOVE_250; {年线趋势确认}
-MA250_OPEN_OK:=C>=MA250*1.01 AND COUNT(C<MA250,30)<=3; {开口启动：刚站上年线或浅幅回踩后重启}
-MA250_OK_USE:=MA250_TREND_OK OR (OPEN_START AND MA250_OPEN_OK);
 
 {─── 路径一：正常介入（NORMAL_ENTER） ───}
 {关卡全过+评分+堆量+阳线主动性+均线放大(含开口放宽)+年线+阻力确认}
