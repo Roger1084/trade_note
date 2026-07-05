@@ -1,0 +1,500 @@
+{---------------------------------------------------------------}
+{  2026 趋势启动择时器 v19                                      }
+{  定位：抓趋势第一次加速（First Expansion），结构驱动择时      }
+{  功能：在通达信主图上标记介入/卖出/减仓 + 100分制评分         }
+{  适用：日线级别趋势启动介入（买后1~2日尽快脱离成本区）        }
+{---------------------------------------------------------------}
+{
+  【架构】结构驱动，非指标堆叠
+  Layer0  市场环境过滤（硬关卡，一票否决）
+  Layer1  趋势状态 TR_（可交易趋势，不决定买点）
+  Layer2  价格结构 PS_（*核心，决定买不买）
+  Layer3  资金行为 VB_（近5日谁在买）
+  Layer4  相对强度 RS_（对行业/指数超额）
+  Layer5  动能确认 MM_（MACD/ATR/扩张确认，只辅助）
+  Entry   统一买点（取消多路径分叉）
+  Sell    统一卖点（保留v18成熟卖减体系）
+
+  【评分权重 / 满分100】
+  PS 价格结构 40 | VB 资金行为 30 | TR 趋势状态 20 | MM 动能确认 10
+  RS 相对强度计入 MM 层（占 MM 约60%权重）
+
+  【命名规范】
+  TR_ = Trend State    VB_ = Volume Behavior
+  PS_ = Price Structure  RS_ = Relative Strength  MM_ = Momentum
+}
+
+{---------------------------------------------------------------}
+{  * 可调参数区（优化时只改这里，不动核心逻辑）                  }
+{---------------------------------------------------------------}
+
+{--- 功能开关 ---}
+USE_WEEK:=1;        {1=周线趋势过滤}
+USE_MA250:=1;       {1=年线过滤}
+USE_ANTI_CHASE:=1;  {1=防追高}
+USE_HY:=1;          {1=右下角展示板块信息}
+CAUTIOUS_STOP:=1;   {1=ATR止损更贴近均线}
+
+{--- EMA 周期（主图显示，一般不改） ---}
+P_EMA5:=5; P_EMA13:=13; P_EMA34:=34; P_EMA55:=55;
+
+{--- 趋势状态 TR ---}
+P_TR13_SLOPE:=1.002;       {MA13 3日斜率阈值}
+P_TR34_SLOPE:=1.001;       {MA34 5日斜率阈值}
+P_TR_MAX_EXT:=1.18;        {现价/MA34 上限}
+P_TR_MIN_SCORE:=12;        {趋势状态最低分（硬门槛）}
+
+{--- 趋势扩张 TR_EXP（First Expansion 核心） ---}
+P_EXP_RISE10:=0.08;        {近10日最低涨幅（有趋势基础）}
+P_EXP_MA13_ACC:=1.003;     {MA13 2日加速斜率}
+P_EXP_VOL_RT:=1.08;        {扩张日量/5日均量}
+P_EXP_MAX_EXT:=1.14;       {扩张时距MA34上限}
+
+{--- 价格结构 PS ---}
+P_BRK_DAYS:=20;            {平台突破参考天数}
+P_BRK_MAX_EXT:=1.16;       {突破时距MA34上限}
+P_PULL_DAYS:=8;            {回踩观察窗口}
+P_PULL_TOL_HI:=1.025;      {回踩上沿=MA13*此值}
+P_PULL_TOL_LO:=0.965;      {回踩下沿=MA34*此值}
+P_ENG_RISE15:=0.15;        {反包前置：近15日涨幅}
+P_ENGULF_VOL:=1.20;        {反包重新放量倍数（vs昨日）}
+P_ENGULF_VOLR:=1.50;       {反包量比下限（vs5日均量）}
+P_ENGULF_WIN:=5;           {反包洗盘观察窗口}
+P_BOX_DAYS:=15;            {箱体天数}
+P_BOX_SHRINK:=0.85;        {箱体内缩量阈值}
+P_PS_MIN_SCORE:=22;        {结构最低分（硬门槛）}
+
+{--- 资金行为 VB ---}
+P_VB_STK_DYS:=4;           {堆量最少持续天数}
+P_VB_STK_RT:=1.02;          {5均量/20均量 堆量阈值}
+P_VB_EXPAND:=1.12;         {重新放量：今日/昨日}
+P_VB_YANG_BIAS:=1.04;      {阳量占比合格线}
+P_VB_MIN_SCORE:=15;        {量能最低分（硬门槛）}
+
+{--- 相对强度 RS ---}
+P_RS_STRONG:=0.03;         {5日超额≥3% 强}
+P_RS_OK:=0.01;             {5日超额≥1% 合格}
+
+{--- 评分与买点 ---}
+P_SCORE_ENTRY:=75;         {统一介入门槛}
+P_SCORE_EXT:=80;           {延伸区（C/MA34>1.12）门槛}
+P_ENT_FILTER:=5;           {同向信号最小间隔K线数}
+P_HOLD_DAYS:=30;           {介入后卖出观察期}
+
+{--- 防追高 ---}
+P_CH_MA5:=1.068;
+P_CH_MA13:=1.13;
+P_CH_PCT:=7.5;
+P_CH_RISE10:=0.28;
+P_CH_RISE20:=0.45;
+
+{--- ATR 止损 ---}
+P_ATR_N:=14;
+P_ATR_K13:=IF(CAUTIOUS_STOP=1,1.0,1.2);
+P_ATR_K34:=IF(CAUTIOUS_STOP=1,0.48,0.6);
+
+{---------------------------------------------------------------}
+{  基础均线（主图）                                             }
+{---------------------------------------------------------------}
+MA5:EMA(C,P_EMA5),COLORYELLOW,LINETHICK2;
+MA13:EMA(C,P_EMA13),COLORRED,LINETHICK2;
+MA34:EMA(C,P_EMA34),COLORGREEN,LINETHICK1;
+MA55:=EMA(C,P_EMA55);
+MA250:MA(C,250),COLORGRAY,LINETHICK1;
+
+{---------------------------------------------------------------}
+{  通用基础指标                                                 }
+{---------------------------------------------------------------}
+VMA5:=MA(V,5);
+VMA20:=MA(V,20);
+VOLR:=V/MAX(VMA5,1);                     {量比（相对5日均量）}
+PCT_CHG:=(C/REF(C,1)-1)*100;
+BODY_RATIO:=ABS(C-O)/(H-L+0.001);
+UP_SHADOW:=(H-C)/(H-L+0.001);
+LOW_SHADOW:=(MIN(C,O)-L)/(H-L+0.001);
+
+TRUE_RANGE_VAL:=MAX(MAX(H-L,ABS(H-REF(C,1))),ABS(L-REF(C,1)));
+ATR14:=MA(TRUE_RANGE_VAL,P_ATR_N);
+ATR_MA20:=MA(ATR14,20);
+ATR_STOP:=MAX(MA13-ATR14*P_ATR_K13, MA34-ATR14*P_ATR_K34);
+ATR_RISK:=MAX((C-ATR_STOP)/C, 0);
+ATR_PCT:=ATR14/C;
+
+DIF:=EMA(C,12)-EMA(C,26);
+DEA:=EMA(DIF,9);
+MACD_HIST:=DIF-DEA;
+
+{---------------------------------------------------------------}
+{  Layer0：市场环境过滤（Market Regime）                        }
+{  功能：回答"能不能在这个环境里做"，不决定具体买点             }
+{---------------------------------------------------------------}
+
+{--- 周线趋势 ---}
+WC:=C#WEEK;
+WMA5:=MA(C,5)#WEEK;
+WMA10:=MA(C,10)#WEEK;
+WMA20:=MA(C,20)#WEEK;
+W_UP:=WC>=WMA10*0.98 AND WMA5>=WMA10*0.995 AND WMA10>=WMA20*0.985
+     AND (WMA5>=REF(WMA5,1)*0.998 OR WC>=HHV(WC,20)*0.90);
+MR_WEEK:=IF(USE_WEEK=1, W_UP, 1);
+
+{--- 年线 ---}
+NO_BREAK_250:=COUNT(C<MA250,30)=0;
+SAFE_ABOVE_250:=C>=MA250*1.03;
+MR_MA250:=IF(USE_MA250=1, NO_BREAK_250 AND SAFE_ABOVE_250, 1);
+
+{--- 量能底线 ---}
+MR_VOL:=V>=VMA20*0.85;
+
+{--- 位置底线 ---}
+MR_POS:=C/MA34<=P_TR_MAX_EXT;
+
+{--- 防追高 ---}
+AT_20HIGH:=C>=HHV(H,20)*0.972;
+AT_60HIGH:=C>=HHV(H,60)*0.965 AND HHV(H,60)>HHV(H,30)*1.03;
+RISE_10D:=(C-REF(C,10))/REF(C,10);
+RISE_20D:=(C-REF(C,20))/REF(C,20);
+UP_RUN:=COUNT(C>REF(C,1),5);
+MA5_EXT:=C/MA5;
+MA13_EXT:=C/MA13;
+STALL_VOL:=V>=VMA20*2.2 AND C<=REF(C,1)*1.008 AND PCT_CHG<2.5;
+MR_CHASE:=IF(USE_ANTI_CHASE=1,
+         MA5_EXT<=P_CH_MA5 AND MA13_EXT<=P_CH_MA13
+         AND C/MA34<=P_TR_MAX_EXT AND PCT_CHG<=P_CH_PCT
+         AND UP_RUN<=4 AND RISE_10D<P_CH_RISE10 AND RISE_20D<P_CH_RISE20
+         AND NOT(STALL_VOL) AND NOT(AT_60HIGH), 1);
+
+MR_ALL:=MR_WEEK AND MR_MA250 AND MR_VOL AND MR_POS AND MR_CHASE;
+
+{---------------------------------------------------------------}
+{  Layer1：趋势状态 TR_（Trend State）                          }
+{  功能：判断个股是否处于可交易趋势；买点由 PS_ 决定              }
+{---------------------------------------------------------------}
+TR_EMA_STACK:=MA5>=MA13*0.995 AND MA13>=MA34*0.995;
+TR_EMA13_UP:=MA13>=REF(MA13,3)*P_TR13_SLOPE;
+TR_EMA34_UP:=MA34>=REF(MA34,5)*P_TR34_SLOPE;
+TR_PRICE_OK:=C>=MA34*0.995 AND C>=MA55*0.985 AND MA34>=MA55*0.99;
+TR_POS_OK:=C/MA34<=P_TR_MAX_EXT;
+TR_OK:=TR_EMA_STACK AND TR_EMA13_UP AND TR_PRICE_OK AND TR_POS_OK;
+
+{趋势扩张：趋势第一次加速（替代原多个趋势重复变量）}
+TR_EXP_RISE:=(C-REF(C,10))/REF(C,10)>=P_EXP_RISE10;
+TR_EXP_MA13:=MA13>=REF(MA13,2)*P_EXP_MA13_ACC;
+TR_EXP_VOL:=V>=VMA5*P_EXP_VOL_RT;
+TR_EXP_BRK:=C>REF(HHV(H,P_BRK_DAYS),1)*0.998 OR C>=HHV(H,P_BRK_DAYS)*0.985;
+TR_EXP_EXT:=C/MA34<=P_EXP_MAX_EXT;
+TR_EXP:=TR_OK AND TR_EXP_RISE AND TR_EXP_MA13 AND TR_EXP_VOL AND TR_EXP_BRK AND TR_EXP_EXT;
+
+{TR 评分 0~20}
+TR_S1:=IF(TR_EMA_STACK AND TR_EMA13_UP AND TR_EMA34_UP, 8,
+      IF(TR_EMA_STACK AND TR_EMA13_UP, 5, IF(TR_EMA_STACK, 2, 0)));
+TR_S2:=IF(C>=MA13*1.004, 5, IF(C>=MA13*1.001, 3, IF(C>=MA13*0.998, 1, 0)));
+TR_S3:=IF(TR_EXP, 4, IF(MA13>=REF(MA13,5)*1.005, 2, IF(MA13>=REF(MA13,5)*1.001, 1, 0)));
+TR_S4:=IF(C/MA34<=1.08, 3, IF(C/MA34<=1.12, 2, IF(C/MA34<=P_TR_MAX_EXT, 1, 0)));
+TR_SCORE:=TR_S1+TR_S2+TR_S3+TR_S4;
+
+{---------------------------------------------------------------}
+{  Layer2：价格结构 PS_（*核心，权重40）                       }
+{  五种结构：突破/回踩/反包/箱体/神龙 —— 取最高分，不叠加       }
+{---------------------------------------------------------------}
+
+{--- 1 PS_BREAK 首次平台突破 ---}
+PS_BRK_RAW:=TR_OK
+         AND C>REF(HHV(H,P_BRK_DAYS),1)*0.998
+         AND C>=MA13 AND MA5>=MA13
+         AND C/MA34<=P_BRK_MAX_EXT
+         AND NOT(AT_20HIGH OR C>REF(HHV(H,P_BRK_DAYS),1)*1.025);
+
+PS_BRK_S1:=IF(C>REF(HHV(H,P_BRK_DAYS),1)*1.005, 12,
+          IF(C>REF(HHV(H,P_BRK_DAYS),1)*1.0, 9, 5));
+PS_BRK_S2:=IF(BODY_RATIO>=0.50 AND C>=O, 10, IF(C>=O, 5, 2));
+PS_BRK_S3:=IF(V>=VMA5*1.10 AND V>=REF(V,1)*1.05, 10,
+          IF(V>=VMA5*0.95, 5, 2));
+PS_BRK_S4:=IF(UP_SHADOW<=0.25, 8, IF(UP_SHADOW<=0.35, 4, 1));
+PS_BRK_SC:=IF(PS_BRK_RAW, PS_BRK_S1+PS_BRK_S2+PS_BRK_S3+PS_BRK_S4, 0);
+
+{--- 2 PS_PULL 趋势第一次回踩再启动 ---}
+PS_PULL_ZONE:=COUNT(L<=MA13*P_PULL_TOL_HI AND L>=MA34*P_PULL_TOL_LO, P_PULL_DAYS)>=1;
+PS_PL_RESTART:=C>REF(HHV(H,5),1) OR (C>=HHV(H,P_BRK_DAYS)*0.965 AND C>REF(C,1));
+PS_PULL_RAW:=TR_OK AND PS_PULL_ZONE AND PS_PL_RESTART
+           AND C>=MA5 AND C>=MA13*0.998 AND C/MA34<=P_TR_MAX_EXT
+           AND COUNT(L<=MA13*1.02, P_PULL_DAYS)>=1;
+
+PS_PULL_S1:=IF(PS_PULL_ZONE, 12, 4);
+PS_PULL_S2:=IF(REF(V,1)<=REF(VMA5,1)*0.85 OR REF(V,2)<=REF(VMA5,2)*0.85, 8,
+            IF(REF(V,1)<=REF(VMA5,1)*0.92, 4, 1));
+PS_PULL_S3:=IF(V>=REF(V,1)*1.10, 10, IF(V>=REF(V,1)*1.03, 6, 2));
+PS_PULL_S4:=IF(C>=H*0.97 AND C>=O, 10, IF(C>=O, 5, 2));
+PS_PULL_SCORE:=IF(PS_PULL_RAW, PS_PULL_S1+PS_PULL_S2+PS_PULL_S3+PS_PULL_S4, 0);
+
+{--- 3 PS_ENGULF 反包启动（REBOUND_MODEL 五步） ---}
+{Step1 Trend：近15日已有上涨}
+ENG_TREND:=(C-REF(C,15))/REF(C,15)>=P_ENG_RISE15
+         OR HHV(H,15)>=REF(C,15)*1.12;
+
+{Step2 Pullback：主动洗盘（阴线+缩量+不破EMA13或假跌破收回）}
+ENG_YIN:=C<O OR C<REF(C,1)*0.998;
+ENG_SHRINK:=V<=REF(V,1)*0.92 AND V<=VMA5*0.90;
+ENG_HOLD:=L>=MA13*0.988 OR (L<MA13*0.995 AND C>=MA13*0.993);
+ENG_WASH:=ENG_YIN AND ENG_SHRINK AND ENG_HOLD AND TR_OK;
+ENG_WASH_D:=ENG_WASH AND C/MA34<=P_TR_MAX_EXT;
+ENG_WASH_OK:=COUNT(ENG_WASH_D, P_ENGULF_WIN)>=1;
+
+{Step3 Reclaim：重新抢筹，突破阴线最高/实体}
+ENG_YIN_H:=REF(H,1);
+ENG_YIN_TOP:=MAX(REF(O,1), REF(C,1));
+ENG_RECLAIM:=C>ENG_YIN_H OR C>ENG_YIN_TOP;
+
+{Step4 Volume：重新放量}
+ENG_VOL:=V>=REF(V,1)*P_ENGULF_VOL AND VOLR>=P_ENGULF_VOLR;
+
+{Step5 Expansion：收强}
+ENG_STRONG:=C>=O AND C>=H*0.94 AND UP_SHADOW<=0.38;
+
+PS_ENGULF_RAW:=TR_OK AND ENG_TREND AND ENG_WASH_OK AND ENG_RECLAIM
+             AND ENG_VOL AND ENG_STRONG AND C/MA34<=P_TR_MAX_EXT;
+
+PS_ENG_S1:=IF(ENG_TREND, 8, 0);
+PS_ENG_S2:=IF(ENG_WASH_OK, 8, 0);
+PS_ENG_S3:=IF(C>ENG_YIN_H, 12, IF(C>ENG_YIN_TOP, 8, 3));
+PS_ENG_S4:=IF(ENG_VOL, 8, 0);
+PS_ENG_S5:=IF(ENG_STRONG, 4, 1);
+PS_ENG_SC:=IF(PS_ENGULF_RAW, PS_ENG_S1+PS_ENG_S2+PS_ENG_S3+PS_ENG_S4+PS_ENG_S5, 0);
+
+{--- 4 PS_BOX 箱体整理突破 ---}
+PS_BOX_HI:=HHV(H, P_BOX_DAYS);
+PS_BOX_LO:=LLV(L, P_BOX_DAYS);
+PS_BOX_RANGE:=(PS_BOX_HI-PS_BOX_LO)/MAX(PS_BOX_LO,0.001);
+PS_BOX_SHRINK:=COUNT(V<REF(V,1)*P_BOX_SHRINK, P_BOX_DAYS)>=P_BOX_DAYS*0.4;
+PS_BOX_RAW:=TR_OK AND PS_BOX_RANGE>=0.04 AND PS_BOX_RANGE<=0.18
+         AND PS_BOX_SHRINK
+         AND C>PS_BOX_HI*0.998 AND C/MA34<=P_TR_MAX_EXT;
+
+PS_BOX_S1:=IF(PS_BOX_RANGE<=0.12, 12, 8);
+PS_BOX_S2:=IF(V>=VMA5*1.08, 10, IF(V>=VMA5*0.95, 5, 2));
+PS_BOX_S3:=IF(C>=O AND BODY_RATIO>=0.45, 10, IF(C>=O, 5, 2));
+PS_BOX_S4:=IF(C>PS_BOX_HI*1.003, 8, 4);
+PS_BOX_SCORE:=IF(PS_BOX_RAW, PS_BOX_S1+PS_BOX_S2+PS_BOX_S3+PS_BOX_S4, 0);
+
+{--- 5 PS_DRAGON 神龙箱体启动（保留v18核心，命名统一） ---}
+DRG_MA10:=MA(C,10);
+DRG_ZT:=C/REF(C,1)>1.095 AND C=H;
+DRG_T1:=BARSLAST(DRG_ZT);
+DRG_T1_OK:=DRG_T1>=3 AND DRG_T1<=10;
+DRG_ZT_OPEN:=REF(O, DRG_T1);
+DRG_ZT_CLOSE:=REF(C, DRG_T1);
+DRG_PULL_OK:=COUNT(C>DRG_ZT_OPEN, DRG_T1)=DRG_T1 AND C>DRG_MA10;
+DRG_SHRINK_OK:=COUNT(V<REF(V, DRG_T1), DRG_T1)>=DRG_T1-1;
+DRG_VOL_TRG:=V>VMA5*1.2 AND V>REF(V,1);
+DRG_KLINE_OK:=C>=O AND C>=H*0.92 AND UP_SHADOW<=0.35;
+PS_DRAGON_RAW:=DRG_T1_OK AND DRG_PULL_OK AND DRG_SHRINK_OK
+             AND DRG_VOL_TRG AND DRG_KLINE_OK AND TR_OK;
+
+PS_DRG_S1:=IF(DRG_T1<=5, 10, IF(DRG_T1<=8, 7, 4));
+PS_DRG_S2:=IF(C>=DRG_ZT_CLOSE, 10, IF(C/DRG_ZT_OPEN>=1.02, 6, 3));
+PS_DRG_S3:=IF(COUNT(V<REF(V,DRG_T1)*0.65, DRG_T1)>=DRG_T1-2, 10, 5);
+PS_DRG_S4:=IF(ATR14/ATR_MA20<0.95, 10, 5);
+PS_DRG_SC:=IF(PS_DRAGON_RAW, PS_DRG_S1+PS_DRG_S2+PS_DRG_S3+PS_DRG_S4, 0);
+
+{--- PS 汇总 ---}
+PS_ACTIVE:=PS_BRK_RAW OR PS_PULL_RAW OR PS_ENGULF_RAW OR PS_BOX_RAW OR PS_DRAGON_RAW;
+PS_SCORE:=MIN(40, MAX(PS_BRK_SC, MAX(PS_PULL_SCORE,
+              MAX(PS_ENG_SC, MAX(PS_BOX_SCORE, PS_DRG_SC)))));
+
+{结构标签（展示用，NODRAW）}
+PS_TYPE:=IF(PS_DRAGON_RAW,5,IF(PS_ENGULF_RAW,3,IF(PS_PULL_RAW,2,IF(PS_BOX_RAW,4,IF(PS_BRK_RAW,1,0)))));
+
+{---------------------------------------------------------------}
+{  Layer3：资金行为 VB_（Volume Behavior，权重30）              }
+{  四项：堆量 / 缩量 / 重新放量 / 阳量占比                      }
+{---------------------------------------------------------------}
+VB_STACK_DAYS:=COUNT(VMA5>=VMA20*P_VB_STK_RT, 7);
+VB_STACK:=VMA5>=VMA20*P_VB_STK_RT AND VB_STACK_DAYS>=P_VB_STK_DYS;
+VB_SHRINK:=COUNT(C<REF(C,1) AND V<REF(V,1)*0.95, 3)>=2 AND C>=MA13*0.995;
+VB_EXPAND:=V>=REF(V,1)*P_VB_EXPAND AND V>=VMA5*0.95;
+YANG_DAY:=C>=O OR C>=REF(C,1);
+YANG_VOL_SUM:=SUM(IF(YANG_DAY,V,0),5);
+YANG_DAY_CNT:=SUM(IF(YANG_DAY,1,0),5);
+YANG_VOL_AVG:=YANG_VOL_SUM/MAX(YANG_DAY_CNT,1);
+VB_YANG:=YANG_VOL_AVG/MAX(VMA5,1);
+VB_OK:=VB_STACK OR (VB_SHRINK AND VB_EXPAND) OR (VB_EXPAND AND VB_YANG>=P_VB_YANG_BIAS);
+
+VB_S1:=IF(VB_STACK AND VB_STACK_DAYS>=5, 10,
+      IF(VB_STACK, 7, IF(VMA5>=VMA20, 3, 1)));
+VB_S2:=IF(VB_YANG>=1.08, 8, IF(VB_YANG>=P_VB_YANG_BIAS, 5, IF(VB_YANG>=1.0, 2, 0)));
+VB_S3:=IF(VB_EXPAND AND V>=VMA20*1.15, 8,
+      IF(VB_EXPAND, 5, IF(V>=VMA5*0.9, 2, 0)));
+VB_S4:=IF(VB_SHRINK AND VB_EXPAND, 4,
+      IF(V<=VMA20*3.5, 2, 0));
+VB_SCORE:=VB_S1+VB_S2+VB_S3+VB_S4;
+
+{---------------------------------------------------------------}
+{  Layer4：相对强度 RS_（Relative Strength）                    }
+{  对行业/指数：3日、5日、10日超额收益                          }
+{---------------------------------------------------------------}
+STK_R3:=(C-REF(C,3))/REF(C,3);
+STK_R5:=(C-REF(C,5))/REF(C,5);
+STK_R10:=(C-REF(C,10))/REF(C,10);
+HY_R3:=(HY_INDEXC-REF(HY_INDEXC,3))/REF(HY_INDEXC,3);
+HY_R5:=(HY_INDEXC-REF(HY_INDEXC,5))/REF(HY_INDEXC,5);
+HY_R10:=(HY_INDEXC-REF(HY_INDEXC,10))/REF(HY_INDEXC,10);
+MKT_R3:=(INDEXC-REF(INDEXC,3))/REF(INDEXC,3);
+MKT_R5:=(INDEXC-REF(INDEXC,5))/REF(INDEXC,5);
+MKT_R10:=(INDEXC-REF(INDEXC,10))/REF(INDEXC,10);
+
+RS_HY3:=STK_R3-HY_R3;
+RS_HY5:=STK_R5-HY_R5;
+RS_HY10:=STK_R10-HY_R10;
+RS_MKT3:=STK_R3-MKT_R3;
+RS_MKT5:=STK_R5-MKT_R5;
+RS_MKT10:=STK_R10-MKT_R10;
+
+RS_STRONG:=RS_HY5>=P_RS_STRONG AND RS_MKT5>=P_RS_STRONG*0.5;
+RS_OK:=RS_HY5>=P_RS_OK OR RS_MKT5>=P_RS_OK;
+
+RS_S1:=IF(RS_HY5>=0.05, 3, IF(RS_HY5>=P_RS_STRONG, 2, IF(RS_HY5>=P_RS_OK, 1, 0)));
+RS_S2:=IF(RS_MKT5>=0.04, 2, IF(RS_MKT5>=P_RS_OK, 1, 0));
+RS_S3:=IF(RS_HY3>=0.02 AND RS_MKT3>=0, 2, IF(RS_HY3>=0, 1, 0));
+RS_S4:=IF(RS_HY10>=0.06, 1, IF(RS_HY10>=0.03, 1, 0));
+RS_SCORE:=RS_S1+RS_S2+RS_S3+RS_S4;
+
+{---------------------------------------------------------------}
+{  Layer5：动能确认 MM_（Momentum，权重10；RS占MM约60%）        }
+{  MACD + ATR风险 + 趋势扩张确认；只辅助，不决定买点             }
+{---------------------------------------------------------------}
+MM_MACD:=IF(DIF>=DEA AND MACD_HIST>0 AND MACD_HIST>=REF(MACD_HIST,1), 2,
+         IF(DIF>=DEA, 1, 0));
+MM_ATR:=IF(ATR_RISK>=0.022, 1, IF(ATR_RISK>=0.015, 1, 0));
+MM_EXP:=IF(TR_EXP, 1, IF(MA13>=REF(MA13,3)*1.002, 1, 0));
+MM_RS:=MIN(4, RS_SCORE);
+MM_SCORE:=MIN(10, MM_MACD+MM_ATR+MM_EXP+MM_RS);
+
+{---------------------------------------------------------------}
+{  统一评分（满分100）                                          }
+{---------------------------------------------------------------}
+TOTAL_SCORE:=PS_SCORE+VB_SCORE+TR_SCORE+MM_SCORE;
+综合评分:TOTAL_SCORE,NODRAW;
+结构分:PS_SCORE,NODRAW;
+量能分:VB_SCORE,NODRAW;
+趋势分:TR_SCORE,NODRAW;
+动能分:MM_SCORE,NODRAW;
+
+{---------------------------------------------------------------}
+{  Entry：统一买点                                              }
+{  Trend OK + Structure OK + Volume OK + Score + Expansion       }
+{  取消 NORMAL/LIMIT/YIN/STRONG 多路径                          }
+{---------------------------------------------------------------}
+ENT_SCORE_OK:=TOTAL_SCORE>=P_SCORE_ENTRY
+            AND (C/MA34<=1.12 OR TOTAL_SCORE>=P_SCORE_EXT);
+ENT_STRUCT_OK:=PS_ACTIVE AND PS_SCORE>=P_PS_MIN_SCORE;
+ENT_VB_OK:=VB_OK AND VB_SCORE>=P_VB_MIN_SCORE;
+ENT_TR_OK:=TR_OK AND TR_SCORE>=P_TR_MIN_SCORE;
+ENT_EXP_OK:=TR_EXP OR PS_ENGULF_RAW OR PS_BRK_RAW OR PS_PULL_RAW;
+ENT_ACT:=C>=O AND V>=VMA5*0.85 AND (C>=H*0.93 OR PS_PULL_RAW OR PS_ENGULF_RAW);
+ENT_NOT_LIMIT:=PCT_CHG<9.5;
+
+{前高阻力确认（近阻力须放量突破）}
+PEAK_30:=HHV(H,30);
+NEAR_PEAK:=C>=PEAK_30*0.96 AND NOT(PS_PULL_RAW OR PS_ENGULF_RAW);
+PEAK_OK:=IF(NEAR_PEAK, V>=VMA20*1.25 AND C>=O AND C>=H*0.95, 1);
+
+ENTRY_RAW:=MR_ALL AND ENT_TR_OK AND ENT_STRUCT_OK AND ENT_VB_OK
+        AND ENT_SCORE_OK AND ENT_EXP_OK AND ENT_ACT AND ENT_NOT_LIMIT AND PEAK_OK;
+
+ENTER_SIG:=FILTER(ENTRY_RAW, P_ENT_FILTER);
+
+{---------------------------------------------------------------}
+{  Sell：统一卖点（保留v18成熟体系）                            }
+{---------------------------------------------------------------}
+AFTER_ENTER:=BARSLAST(ENTER_SIG)>=1 AND BARSLAST(ENTER_SIG)<=P_HOLD_DAYS;
+ENT_DAYS:=IF(BARSLAST(ENTER_SIG)>0, BARSLAST(ENTER_SIG)+1, 1);
+ENT_CLOSE:=REF(C,BARSLAST(ENTER_SIG));
+ENT_HIGH:=REF(H,BARSLAST(ENTER_SIG));
+CORE_CLOSE:=ENT_CLOSE;
+CORE_HIGH:=ENT_HIGH;
+
+E2_VALID_BRK13:=C<MA13*0.997;
+E2_MA5_DEAD13:=CROSS(MA13,MA5);
+E2_BELOW13_2:=COUNT(C<MA13,2)=2 AND C<MA13;
+TRD_FAIL_SELL:=E2_VALID_BRK13 OR E2_MA5_DEAD13 OR E2_BELOW13_2;
+
+LNG_UPR_DIST:=UP_SHADOW>=0.45 AND H>=MAX(REF(H,1),CORE_HIGH) AND C<=H-(H-L)*0.55;
+WEAK_CLOSE:=C<=O OR C<=H-(H-L)*0.65;
+UPPER_VOL_EXIT:=LNG_UPR_DIST AND V>=VMA20*1.8 AND WEAK_CLOSE;
+GIANT_YIN:=C<O AND BODY_RATIO>=0.60 AND (O-C)/REF(C,1)>=0.045
+         AND C<=REF(C,3)*1.01 AND (C<MA5 OR C<MA13);
+ABN_DIST:=V>=HHV(V,60)*0.95 AND C<=REF(C,1)*1.015 AND H<=HHV(H,10)*1.01;
+CAP_EXIT_SELL:=UPPER_VOL_EXIT OR GIANT_YIN OR ABN_DIST;
+
+CORE_ZONE_LOW:=MIN(CORE_CLOSE,CORE_HIGH)*0.985;
+CORE_ZONE_BRK:=C<CORE_ZONE_LOW OR C<CORE_CLOSE*0.985;
+RY_GAP:=(MA5-MA13)/MA13;
+RY_BAD:=RY_GAP<REF(RY_GAP,2)*0.65 OR RY_GAP<0.001;
+MA_CONV_FAIL:=MA5<REF(MA5,1) AND MA13<=REF(MA13,1)*1.001 AND RY_BAD;
+BRK_MA5_2:=COUNT(C<MA5,2)=2 AND C<MA5;
+STRUCT_FAIL:=CORE_ZONE_BRK OR MA_CONV_FAIL OR BRK_MA5_2;
+
+VOL_STALL:=V>=VMA20*2.0 AND C<=REF(C,1)*1.01 AND PCT_CHG<=1.0;
+HIGH_AREA:=HHV(H,ENT_DAYS)>=ENT_CLOSE*1.05 OR C>=CORE_HIGH*1.03;
+VOL_SHRINK_3:=V<REF(V,1) AND REF(V,1)<REF(V,2);
+HIGH_YIN_2:=HIGH_AREA AND COUNT(C<O,3)>=2 AND VOL_SHRINK_3;
+NO_NEWHIGH:=HHV(H,5)<=REF(HHV(H,5),1)*1.003 AND HHV(H,3)<HHV(H,10)*0.995;
+ATTACK_LOST:=C>=CORE_HIGH*1.05 AND H<HHV(H,10)*0.985 AND C<HHV(H,10)*0.97 AND V<=VMA20*1.15;
+DECAY_REDUCE:=VOL_STALL OR HIGH_YIN_2 OR NO_NEWHIGH OR ATTACK_LOST;
+
+SELL_RAW:=AFTER_ENTER AND (TRD_FAIL_SELL OR CAP_EXIT_SELL OR STRUCT_FAIL);
+REDUCE_RAW:=AFTER_ENTER AND NOT(SELL_RAW) AND DECAY_REDUCE;
+SELL_SIG:=SELL_RAW AND COUNT(SELL_RAW,ENT_DAYS)=1;
+REDUCE_SIG:=FILTER(REDUCE_RAW AND COUNT(SELL_RAW,ENT_DAYS)=0, 2);
+
+{---------------------------------------------------------------}
+{  展示层                                                       }
+{---------------------------------------------------------------}
+IS_DRAGON:=PS_DRAGON_RAW AND ENTRY_RAW;
+DRAWTEXT(ENTER_SIG AND NOT(IS_DRAGON), LOW*0.95, '介入'), COLORYELLOW;
+DRAWTEXT(ENTER_SIG AND IS_DRAGON, LOW*0.95, '介入'), COLORMAGENTA;
+DRAWTEXT(REDUCE_SIG, HIGH*1.03, '减'), COLORGREEN;
+DRAWTEXT(SELL_SIG, HIGH*1.06, '卖'), COLORGREEN;
+DRAWNUMBER(ENTER_SIG, HIGH*1.10, TOTAL_SCORE), COLORWHITE;
+
+SCORE_MIN:=60; SCORE_OBS:=75; SCORE_GOOD:=85;
+操作评级:IF(TOTAL_SCORE>=SCORE_GOOD,3,IF(TOTAL_SCORE>=SCORE_OBS,2,IF(TOTAL_SCORE>=SCORE_MIN,1,0))),NODRAW;
+DRAWNUMBER(ISLASTBAR, HIGH*1.10, TOTAL_SCORE), COLORWHITE;
+DRAWTEXT(ISLASTBAR AND TOTAL_SCORE>=SCORE_GOOD, HIGH*1.16, '优秀'), COLORYELLOW;
+DRAWTEXT(ISLASTBAR AND TOTAL_SCORE>=SCORE_OBS AND TOTAL_SCORE<SCORE_GOOD, HIGH*1.16, '优先观察'), COLOR00FFFF;
+DRAWTEXT(ISLASTBAR AND TOTAL_SCORE>=SCORE_MIN AND TOTAL_SCORE<SCORE_OBS, HIGH*1.16, '可观察'), COLORWHITE;
+DRAWTEXT(ISLASTBAR AND TOTAL_SCORE<SCORE_MIN, HIGH*1.16, '不参与'), COLORGREEN;
+
+{结构类型提示}
+DRAWTEXT(ISLASTBAR AND PS_TYPE=1, HIGH*1.22, '结构:突破'), COLORWHITE;
+DRAWTEXT(ISLASTBAR AND PS_TYPE=2, HIGH*1.22, '结构:回踩'), COLORWHITE;
+DRAWTEXT(ISLASTBAR AND PS_TYPE=3, HIGH*1.22, '结构:反包'), COLOR00FFFF;
+DRAWTEXT(ISLASTBAR AND PS_TYPE=4, HIGH*1.22, '结构:箱体'), COLORWHITE;
+DRAWTEXT(ISLASTBAR AND PS_TYPE=5, HIGH*1.22, '结构:神龙'), COLORMAGENTA;
+DRAWTEXT(ISLASTBAR AND TR_EXP, HIGH*1.28, '扩张'), COLORYELLOW;
+
+{板块信息（展示，USE_HY=1）}
+HY_REF1:=REF(HY_INDEXC,1);
+HY_CHG_REF:=IF(HY_REF1>0,(HY_INDEXC-HY_REF1)/HY_REF1*100,0);
+HY_CHG_OPEN:=IF(HY_INDEXO>0,(HY_INDEXC-HY_INDEXO)/HY_INDEXO*100,0);
+HY_CHG_PCT:=IF(HY_INDEXO>0 AND HY_INDEXC<>HY_INDEXO,HY_CHG_OPEN,HY_CHG_REF);
+MKT_REF1:=REF(INDEXC,1);
+MKT_CHG_REF:=IF(MKT_REF1>0,(INDEXC-MKT_REF1)/MKT_REF1*100,0);
+MKT_CHG_OPEN:=IF(INDEXO>0,(INDEXC-INDEXO)/INDEXO*100,0);
+MKT_DAY_PCT:=IF(INDEXO>0 AND INDEXC<>INDEXO,MKT_CHG_OPEN,MKT_CHG_REF);
+
+DRAWTEXT_FIX(ISLASTBAR AND USE_HY=1,0,0.02,0,STRCAT('行业 ',HYBLOCK)),COLORYELLOW;
+DRAWTEXT_FIX(ISLASTBAR AND USE_HY=1,0,0.07,0,STRCAT('概念 ',GNBLOCK)),COLORGREEN;
+DRAWTEXT_FIX(ISLASTBAR AND USE_HY=1,0,0.12,0,STRCAT('RS5对行业% ',VAR2STR(RS_HY5*100,2))),COLOR00FFFF;
+DRAWTEXT_FIX(ISLASTBAR AND USE_HY=1,0,0.17,0,STRCAT('RS5对大盘% ',VAR2STR(RS_MKT5*100,2))),COLOR00FFFF;
+SC_DISP1:=STRCAT(VAR2STR(PS_SCORE,0),'/');
+SC_DISP2:=STRCAT(VAR2STR(VB_SCORE,0),'/');
+SC_DISP3:=STRCAT(VAR2STR(TR_SCORE,0),'/');
+SC_DISP4:=VAR2STR(MM_SCORE,0);
+SC_DISP5:=STRCAT(STRCAT(SC_DISP1,SC_DISP2),STRCAT(SC_DISP3,SC_DISP4));
+SCORE_TXT:=STRCAT('PS/VB/TR/MM ',SC_DISP5);
+DRAWTEXT_FIX(ISLASTBAR AND USE_HY=1,0,0.22,0,SCORE_TXT),COLORWHITE;
+
+STOP_LINE:ATR_STOP, DOTLINE, COLORWHITE;
+STICKLINE(CLOSE/REF(C,1)>=1.095,O,C,2,0),COLORYELLOW;
+STICKLINE(CLOSE/REF(C,1)<=0.905,O,C,2,0),COLORGREEN;
