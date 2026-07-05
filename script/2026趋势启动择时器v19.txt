@@ -31,7 +31,6 @@
 {--- 功能开关 ---}
 USE_WEEK:=1;        {1=周线趋势过滤}
 USE_MA250:=1;       {1=年线过滤}
-USE_ANTI_CHASE:=1;  {1=防追高}
 USE_HY:=1;          {1=右下角展示板块信息}
 CAUTIOUS_STOP:=1;   {1=ATR止损更贴近均线}
 
@@ -80,13 +79,6 @@ P_SCORE_ENTRY:=75;         {统一介入门槛}
 P_SCORE_EXT:=80;           {延伸区（C/MA34>1.12）门槛}
 P_ENT_FILTER:=5;           {同向信号最小间隔K线数}
 P_HOLD_DAYS:=30;           {介入后卖出观察期}
-
-{--- 防追高 ---}
-P_CH_MA5:=1.068;
-P_CH_MA13:=1.13;
-P_CH_PCT:=7.5;
-P_CH_RISE10:=0.28;
-P_CH_RISE20:=0.45;
 
 {--- ATR 止损 ---}
 P_ATR_N:=14;
@@ -149,22 +141,7 @@ MR_VOL:=V>=VMA20*0.85;
 {--- 位置底线 ---}
 MR_POS:=C/MA34<=P_TR_MAX_EXT;
 
-{--- 防追高 ---}
-AT_20HIGH:=C>=HHV(H,20)*0.972;
-AT_60HIGH:=C>=HHV(H,60)*0.965 AND HHV(H,60)>HHV(H,30)*1.03;
-RISE_10D:=(C-REF(C,10))/REF(C,10);
-RISE_20D:=(C-REF(C,20))/REF(C,20);
-UP_RUN:=COUNT(C>REF(C,1),5);
-MA5_EXT:=C/MA5;
-MA13_EXT:=C/MA13;
-STALL_VOL:=V>=VMA20*2.2 AND C<=REF(C,1)*1.008 AND PCT_CHG<2.5;
-MR_CHASE:=IF(USE_ANTI_CHASE=1,
-         MA5_EXT<=P_CH_MA5 AND MA13_EXT<=P_CH_MA13
-         AND C/MA34<=P_TR_MAX_EXT AND PCT_CHG<=P_CH_PCT
-         AND UP_RUN<=4 AND RISE_10D<P_CH_RISE10 AND RISE_20D<P_CH_RISE20
-         AND NOT(STALL_VOL) AND NOT(AT_60HIGH), 1);
-
-MR_ALL:=MR_WEEK AND MR_MA250 AND MR_VOL AND MR_POS AND MR_CHASE;
+MR_ALL:=MR_WEEK AND MR_MA250 AND MR_VOL AND MR_POS;
 
 {---------------------------------------------------------------}
 {  Layer1：趋势状态 TR_（Trend State）                          }
@@ -199,6 +176,7 @@ TR_SCORE:=TR_S1+TR_S2+TR_S3+TR_S4;
 {---------------------------------------------------------------}
 
 {--- 1 PS_BREAK 首次平台突破 ---}
+AT_20HIGH:=C>=HHV(H,20)*0.972;
 PS_BRK_RAW:=TR_OK
          AND C>REF(HHV(H,P_BRK_DAYS),1)*0.998
          AND C>=MA13 AND MA5>=MA13
