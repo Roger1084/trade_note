@@ -50,9 +50,9 @@ P_EXP_VOL_RT:=1.08;        {扩张日量/5日均量}
 P_EXP_MAX_EXT:=1.14;       {扩张时距MA34上限}
 
 {--- 价格结构 PS ---}
-P_BRK_DAYS:=20;            {平台突破参考天数}
+P_BRK_DAYS:=30;            {平台突破参考天数}
 P_BRK_MAX_EXT:=1.16;       {突破时距MA34上限}
-P_PULL_DAYS:=8;            {回踩观察窗口}
+P_PULL_DAYS:=10;            {回踩观察窗口}
 P_PULL_TOL_HI:=1.025;      {回踩上沿=MA13*此值}
 P_PULL_TOL_LO:=0.965;      {回踩下沿=MA34*此值}
 P_ENG_RISE15:=0.15;        {反包前置：近15日涨幅}
