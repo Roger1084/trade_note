@@ -51,7 +51,7 @@ P_EXP_MAX_EXT:=1.14;       {扩张时距MA34上限}
 {--- 价格结构 PS ---}
 P_BRK_DAYS:=30;            {平台突破参考天数}
 P_BRK_MAX_EXT:=1.16;       {突破时距MA34上限}
-P_PULL_DAYS:=10;            {回踩观察窗口}
+P_PULL_DAYS:=20;            {回踩观察窗口}
 P_PULL_TOL_HI:=1.025;      {回踩上沿=MA13*此值}
 P_PULL_TOL_LO:=0.965;      {回踩下沿=MA34*此值}
 P_ENG_RISE15:=0.15;        {反包前置：近15日涨幅}
@@ -59,8 +59,8 @@ P_ENGULF_VOL:=1.20;        {反包重新放量倍数（vs昨日）}
 P_ENGULF_VOLR:=1.50;       {反包量比下限（vs5日均量）}
 P_ENGULF_WIN:=5;           {反包洗盘观察窗口}
 P_BOX_DAYS:=30;            {箱体天数}
-P_BOX_SHRINK:=0.85;        {箱体内缩量阈值}
-P_BOX_MAX_RNG:=0.22;       {箱体振幅上限（原0.18，箱底调试放宽）}
+P_BOX_SHRINK:=0.80;        {箱体内缩量阈值}
+P_BOX_MAX_RNG:=0.22;       {箱体振幅上限}
 P_BOX_MA250:=0.98;         {箱体突破时年线放宽：C>=MA250×此值}
 P_PS_MIN_SCORE:=22;        {结构最低分（硬门槛）}
 
